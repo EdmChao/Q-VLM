@@ -49,5 +49,5 @@ config:
     time_horizon: 4
     interval_length: 0.5
 
-checkpoint_path: null
+checkpoint_path: ${oc.env:CKPT_PATH}
 lr: 1e-4
