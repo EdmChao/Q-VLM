@@ -26,6 +26,9 @@ from navsim.planning.training.dataset import Dataset
 
 logger = logging.getLogger(__name__)
 
+print("Loaded test_gen_traj_proposals.py")
+
+
 # Hydra config used by the original runner
 CONFIG_PATH = "config/pdm_scoring"
 CONFIG_NAME = "default_run_pdm_score_gpu"
@@ -37,6 +40,8 @@ def main(cfg: DictConfig) -> None:
     :param cfg: omegaconf dictionary
     """
 
+    print("Starting test_gen_traj_proposals.main()")
+
     def setup_logger(cfg):
         log_level = getattr(cfg, "log_level", "INFO")
         log_format = "%(asctime)s %(levelname)s %(message)s"
@@ -46,14 +51,18 @@ def main(cfg: DictConfig) -> None:
 
     # In your main function, call:
     setup_logger(cfg)
+    print("Logger set up")
     combined = cfg.get('combined_inference', False)
 
     print(f'Combined inference: {combined}')
+    print(f'cfg keys: {list(cfg.keys())}')
     dump_path = os.getenv('SUBSCORE_PATH')
     print(f'Subscore/Trajectories saved to {dump_path}')
     # gpu inference
     agent: AbstractAgent = instantiate(cfg.agent)
+    print('Instantiated agent, initializing...')
     agent.initialize()
+    print('Agent initialized')
 
     scene_loader_inference = SceneLoader(
     synthetic_sensor_path=Path(cfg.synthetic_sensor_path),
@@ -96,4 +105,9 @@ def main(cfg: DictConfig) -> None:
         for d in proc_prediction:
             merged.update(d)
     pickle.dump(merged, open(os.environ['SUBSCORE_PATH'], 'wb'))
+    try:
+        size = os.path.getsize(os.environ['SUBSCORE_PATH'])
+    except Exception:
+        size = 'unknown'
+    print(f"WROTE PICKLE: {os.environ.get('SUBSCORE_PATH')} len={len(merged)} size={size}")
     print("WROTE PICKLE:", os.environ['SUBSCORE_PATH'], "len:", len(merged), "size:", os.path.getsize(os.environ['SUBSCORE_PATH']))

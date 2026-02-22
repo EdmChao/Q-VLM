@@ -33,8 +33,8 @@ experiment_name="${dir}/test-single-infer-${split}"
 export DP_PREDS=none
 # If SUBSCORE_PATH not set, default to a file under NAVSIM_EXP_ROOT using ckpt basename
 if [ -z "${SUBSCORE_PATH}" ]; then
-	base=$(basename "${ckpt}")
-	export SUBSCORE_PATH=${NAVSIM_EXP_ROOT}/${dir}/${base}.pkl
+    # Default to NAVSIM_EXP_ROOT/<dir>/<split>.pkl for DP proposals (not ckpt-based filename)
+    export SUBSCORE_PATH=${NAVSIM_EXP_ROOT}/${dir}/${split}.pkl
 fi
 
 # Debug output to help ensure the script is invoked with correct env vars
