@@ -111,3 +111,7 @@ def main(cfg: DictConfig) -> None:
         size = 'unknown'
     print(f"WROTE PICKLE: {os.environ.get('SUBSCORE_PATH')} len={len(merged)} size={size}")
     print("WROTE PICKLE:", os.environ['SUBSCORE_PATH'], "len:", len(merged), "size:", os.path.getsize(os.environ['SUBSCORE_PATH']))
+
+
+if __name__ == "__main__":
+    main()
