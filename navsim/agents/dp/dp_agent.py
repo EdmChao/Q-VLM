@@ -79,8 +79,17 @@ class DPAgent(AbstractAgent):
 
     def initialize(self) -> None:
         """Inherited, see superclass."""
-        state_dict: Dict[str, Any] = torch.load(self._checkpoint_path, map_location=torch.device("cpu"))[
-            "state_dict"]
+        # PyTorch 2.6 introduced `weights_only=True` by default for `torch.load` which
+        # prevents unpickling non-tensor objects. Older checkpoints may require full
+        # unpickling. Try to load with `weights_only=False` when supported, otherwise
+        # fall back to the older call. Only do this for trusted checkpoints.
+        try:
+            ckpt = torch.load(self._checkpoint_path, map_location=torch.device("cpu"), weights_only=False)
+        except TypeError:
+            # older PyTorch does not accept weights_only argument
+            ckpt = torch.load(self._checkpoint_path, map_location=torch.device("cpu"))
+
+        state_dict: Dict[str, Any] = ckpt["state_dict"]
         self.load_state_dict({k.replace("agent.", ""): v for k, v in state_dict.items()})
 
     def get_sensor_config(self) -> SensorConfig:
