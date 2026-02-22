@@ -39,7 +39,7 @@ fi
 
 python ${NAVSIM_DEVKIT_ROOT}/navsim/planning/script/test_gen_traj_proposals.py \
 	agent=$agent \
-	dataloader.params.batch_size=32 \
+	dataloader.params.batch_size=1 \
 	agent.checkpoint_path=${ckpt} \
 	trainer.params.precision=32 \
 	experiment_name=${experiment_name} \

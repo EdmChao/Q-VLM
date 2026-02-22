@@ -73,6 +73,18 @@ def main(cfg: DictConfig) -> None:
         append_token_to_batch=True,
         is_training=False
     )
+
+    #extract only single item from dataset for testing purposes
+    single_index = os.getenv("SINGLE_INDEX")
+    if single_index is not None:
+        try:
+            idx = int(single_index)
+            from torch.utils.data import Subset
+            dataset = Subset(dataset, [idx])
+            logger.info(f"Using single dataset index {idx}")
+        except Exception:
+            logger.warning(f"Invalid SINGLE_INDEX={single_index}; running full dataset")
+        
     dataloader = DataLoader(dataset, **cfg.dataloader.params, shuffle=False)
 
     trainer = pl.Trainer(**cfg.trainer.params, callbacks=agent.get_training_callbacks())
