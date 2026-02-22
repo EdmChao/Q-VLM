@@ -72,6 +72,12 @@ def main():
             # common field for VoVNet checkpoint
             cfg.vov_ckpt = backbone_ckpt
         agent = DPAgent(config=cfg, lr=1e-4, checkpoint_path=ckpt)
+
+        #print expected param shape to narrow down on mismatch
+        for k, p in agent.model.named_parameters():
+            if "pos_emb" in k or "cond_pos_emb" in k:
+                print(k, tuple(p.shape))
+
         try:
             agent.initialize()
         except Exception as e:

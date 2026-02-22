@@ -31,7 +31,7 @@ print("Loaded test_gen_traj_proposals.py")
 
 # Hydra config used by the original runner
 CONFIG_PATH = "config/pdm_scoring"
-CONFIG_NAME = "default_run_pdm_score_gpu"
+CONFIG_NAME = "diffusion_inference"
 
 @hydra.main(config_path=CONFIG_PATH, config_name=CONFIG_NAME, version_base=None)
 def main(cfg: DictConfig) -> None:

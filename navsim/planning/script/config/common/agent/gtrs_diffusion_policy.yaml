@@ -14,13 +14,15 @@
 # limitations under the License.
 
 _target_: navsim.agents.dp.dp_agent.DPAgent
-_convert_: 'all'
+_convert_: "all"
 
 config:
   _target_: navsim.agents.dp.dp_config.DPConfig
-  _convert_: 'all'
+  _convert_: "all"
   seq_len: 2
-  ckpt_path: dp_ckpt
+  # modify ckpt_path to my downloaded gtrs_dp.ckpt
+  # ckpt_path: dp_ckpt
+  ckpt_path: ${oc.env:CKPT_PATH}
   lidar_seq_len: 4
   sigma: 0.5
   trajectory_imi_weight: 1.0
@@ -36,14 +38,14 @@ config:
   camera_height: 512
   img_vert_anchors: 16
   img_horz_anchors: 64
-  backbone_type: 'vov'
+  backbone_type: "vov"
 
   vov_ckpt: ${oc.env:OPENSCENE_DATA_ROOT}/models/dd3d_det_final.pth
   lr_mult_backbone: 1.0
 
   trajectory_sampling:
     _target_: nuplan.planning.simulation.trajectory.trajectory_sampling.TrajectorySampling
-    _convert_: 'all'
+    _convert_: "all"
     time_horizon: 4
     interval_length: 0.5
 
