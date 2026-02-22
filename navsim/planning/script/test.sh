@@ -37,12 +37,21 @@ if [ -z "${SUBSCORE_PATH}" ]; then
 	export SUBSCORE_PATH=${NAVSIM_EXP_ROOT}/${dir}/${base}.pkl
 fi
 
-python ${NAVSIM_DEVKIT_ROOT}/navsim/planning/script/test_gen_traj_proposals.py \
-	agent=$agent \
-	dataloader.params.batch_size=1 \
-	agent.checkpoint_path=${ckpt} \
-	trainer.params.precision=32 \
-	experiment_name=${experiment_name} \
-	+cache_path=null \
-	metric_cache_path=${metric_cache_path} \
-	train_test_split=${split}_two_stage
+# Debug output to help ensure the script is invoked with correct env vars
+echo "DEBUG: which python -> $(which python)"
+echo "DEBUG: CKPT_PATH='${CKPT_PATH}'"
+echo "DEBUG: NAVSIM_EXP_ROOT='${NAVSIM_EXP_ROOT}'"
+echo "DEBUG: SUBSCORE_PATH='${SUBSCORE_PATH}'"
+echo "DEBUG: NAVSIM_DEVKIT_ROOT='${NAVSIM_DEVKIT_ROOT}'"
+echo "DEBUG: metric_cache_path='${metric_cache_path}'"
+
+# Run python in unbuffered mode so prints appear immediately
+python -u ${NAVSIM_DEVKIT_ROOT}/navsim/planning/script/test_gen_traj_proposals.py \
+    agent=$agent \
+    dataloader.params.batch_size=1 \
+    agent.checkpoint_path=${ckpt} \
+    trainer.params.precision=32 \
+    experiment_name=${experiment_name} \
+    +cache_path=null \
+    metric_cache_path=${metric_cache_path} \
+    train_test_split=${split}_two_stage

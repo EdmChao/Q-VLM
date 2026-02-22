@@ -96,3 +96,4 @@ def main(cfg: DictConfig) -> None:
         for d in proc_prediction:
             merged.update(d)
     pickle.dump(merged, open(os.environ['SUBSCORE_PATH'], 'wb'))
+    print("WROTE PICKLE:", os.environ['SUBSCORE_PATH'], "len:", len(merged), "size:", os.path.getsize(os.environ['SUBSCORE_PATH']))
