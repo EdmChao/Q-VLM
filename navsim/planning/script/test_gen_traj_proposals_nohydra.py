@@ -63,6 +63,14 @@ def main():
     agent = None
     if DPAgent is not None and DPConfig is not None:
         cfg = DPConfig()
+        # allow overriding backbone type and checkpoint via env vars
+        backbone_type = os.environ.get("BACKBONE_TYPE")
+        backbone_ckpt = os.environ.get("BACKBONE_CKPT")
+        if backbone_type:
+            cfg.backbone_type = backbone_type
+        if backbone_ckpt:
+            # common field for VoVNet checkpoint
+            cfg.vov_ckpt = backbone_ckpt
         agent = DPAgent(config=cfg, lr=1e-4, checkpoint_path=ckpt)
         try:
             agent.initialize()
