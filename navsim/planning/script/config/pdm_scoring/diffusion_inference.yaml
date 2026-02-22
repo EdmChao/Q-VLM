@@ -21,6 +21,10 @@ defaults:
   - _self_
   - override train_test_split: navtest
 
+# Minimal experiment identifiers so Hydra's output_dir can be resolved without extra env vars
+experiment_name: diffusion_inference
+output_dir: ./outputs/${experiment_name}/${experiment_uid}
+
 simulator:
   _target_: navsim.planning.simulation.planner.pdm_planner.simulation.pdm_simulator.PDMSimulator
   _convert_: "all"
