@@ -510,10 +510,11 @@ class Scene:
                 camera_dict=scene_dict_list[frame_idx]["cams"],
                 sensor_names=sensor_names,
             )
-
+            #try to get lidar_path_val outside, so we can set to none if lidar_path is missing, instead of trying to call Path(None)
+            lidar_path_val = scene_dict_list[frame_idx]["lidar_path"]
             lidar = Lidar.from_paths(
                 sensor_blobs_path=sensor_blobs_path,
-                lidar_path=Path(scene_dict_list[frame_idx]["lidar_path"]),
+                lidar_path=Path(lidar_path_val) if lidar_path_val is not None else None,
                 sensor_names=sensor_names,
             )
 
