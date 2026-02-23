@@ -199,13 +199,28 @@ def main(cfg: DictConfig) -> None:
                     merged.update(d)
                 else:
                     logger.warning(f"Skipping unexpected prediction item of type {type(d)}")
-    pickle.dump(merged, open(os.environ['SUBSCORE_PATH'], 'wb'))
+    # Resolve SUBSCORE_PATH env variable safely. It must be a filepath, not a directory.
+    subscore_env = os.environ.get('SUBSCORE_PATH')
+    if subscore_env is None:
+        # default to local file if not provided
+        out_path = Path.cwd() / f"subscore_{uuid.uuid4().hex}.pkl"
+        print(f"[WARNING] SUBSCORE_PATH not set; writing to default {out_path}")
+    else:
+        out_path = Path(subscore_env)
+        if out_path.is_dir() or str(subscore_env).endswith(os.path.sep):
+            # treat as directory: create a file inside it
+            out_path = out_path / f"subscore_{uuid.uuid4().hex}.pkl"
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(out_path, 'wb') as f:
+        pickle.dump(merged, f)
+
     try:
-        size = os.path.getsize(os.environ['SUBSCORE_PATH'])
+        size = out_path.stat().st_size
     except Exception:
         size = 'unknown'
-    print(f"WROTE PICKLE: {os.environ.get('SUBSCORE_PATH')} len={len(merged)} size={size}")
-    print("WROTE PICKLE:", os.environ['SUBSCORE_PATH'], "len:", len(merged), "size:", os.path.getsize(os.environ['SUBSCORE_PATH']))
+    print(f"WROTE PICKLE: {out_path} len={len(merged)} size={size}")
+    print("WROTE PICKLE:", out_path, "len:", len(merged), "size:", size)
 
 
 if __name__ == "__main__":
