@@ -25,6 +25,15 @@ defaults:
 experiment_name: diffusion_inference
 output_dir: ./outputs/${experiment_name}/${experiment_uid}
 
+# If you want to use the NavsimHard dataset instead of the default navsim_logs,
+# set the environment variable `NAVSIMHARD_PATH` to the folder containing the
+# NavsimHard logs (e.g. /data/.../navsimhard) and this will be used. Otherwise
+# the repo defaults will be used.
+navsim_log_path: ${oc.env:NAVSIMHARD_PATH}
+synthetic_sensor_path: ${oc.env:NAVSIMHARD_PATH}/sensor_blobs
+original_sensor_path: ${oc.env:NAVSIMHARD_PATH}/sensor_blobs
+synthetic_scenes_path: ${oc.env:NAVSIMHARD_PATH}/synthetic_scene_pickles
+
 simulator:
   _target_: navsim.planning.simulation.planner.pdm_planner.simulation.pdm_simulator.PDMSimulator
   _convert_: "all"
