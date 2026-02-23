@@ -186,9 +186,19 @@ def main(cfg: DictConfig) -> None:
 
     # merge and save
     merged = {}
+    # Predictions from PL can come back in a few formats depending on agent:
+    # - a dict mapping token->result
+    # - an iterable (list) of dicts
+    # Be defensive and support both shapes.
     for proc_prediction in predictions:
-        for d in proc_prediction:
-            merged.update(d)
+        if isinstance(proc_prediction, dict):
+            merged.update(proc_prediction)
+        else:
+            for d in proc_prediction:
+                if isinstance(d, dict):
+                    merged.update(d)
+                else:
+                    logger.warning(f"Skipping unexpected prediction item of type {type(d)}")
     pickle.dump(merged, open(os.environ['SUBSCORE_PATH'], 'wb'))
     try:
         size = os.path.getsize(os.environ['SUBSCORE_PATH'])
