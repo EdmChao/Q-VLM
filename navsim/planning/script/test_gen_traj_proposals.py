@@ -14,6 +14,7 @@ import pandas as pd
 import pytorch_lightning as pl
 import torch.distributed as dist
 from hydra.utils import instantiate
+from navsim.common.dataclasses import SceneFilter
 
 from omegaconf import DictConfig
 from torch.utils.data import DataLoader
@@ -64,13 +65,24 @@ def main(cfg: DictConfig) -> None:
     agent.initialize()
     print('Agent initialized')
 
+    # Hardcoded relaxed scene filter: 1 history + 1 future frame (2 frames total)
+    # This overrides the composed Hydra `train_test_split.scene_filter` for quick testing.
+    scene_filter_override = SceneFilter(
+        num_history_frames=1,
+        num_future_frames=1,
+        frame_interval=1,
+        has_route=False,
+        include_synthetic_scenes=True,
+    )
+
     scene_loader_inference = SceneLoader(
-    synthetic_sensor_path=Path(cfg.synthetic_sensor_path),
-    original_sensor_path=Path(cfg.original_sensor_path),
-    data_path=Path(cfg.navsim_log_path),
-    synthetic_scenes_path=Path(cfg.synthetic_scenes_path),
-    scene_filter=instantiate(cfg.train_test_split.scene_filter),
-    sensor_config=agent.get_sensor_config(),
+        synthetic_sensor_path=Path(cfg.synthetic_sensor_path),
+        original_sensor_path=Path(cfg.original_sensor_path),
+        data_path=Path(cfg.navsim_log_path),
+        synthetic_scenes_path=Path(cfg.synthetic_scenes_path),
+        scene_filter=scene_filter_override,
+        #scene_filter=instantiate(cfg.train_test_split.scene_filter),
+        sensor_config=agent.get_sensor_config(),
     )
 
     # Diagnostic guard: ensure resolved paths look correct and there are log files to load.
@@ -125,7 +137,29 @@ def main(cfg: DictConfig) -> None:
         
     dataloader = DataLoader(dataset, **cfg.dataloader.params, shuffle=False)
 
-    trainer = pl.Trainer(**cfg.trainer.params, callbacks=agent.get_training_callbacks())
+    # Adjust trainer params to avoid PyTorch Lightning DDP sampler assertion when
+    # the dataset is smaller than the number of GPU processes. In that case some
+    # ranks would receive zero samples which triggers an AssertionError.
+    trainer_params = dict(cfg.trainer.params) if cfg.get('trainer') else {}
+    try:
+        requested_devices = trainer_params.get('devices', None)
+        if requested_devices is None:
+            available_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
+            devices_to_check = available_gpus if available_gpus > 0 else 1
+        else:
+            devices_to_check = int(requested_devices)
+    except Exception:
+        devices_to_check = 1
+
+    dataset_len = len(dataset)
+    if (devices_to_check > 1) and (dataset_len < devices_to_check):
+        logger.warning(
+            f"Dataset size ({dataset_len}) < devices ({devices_to_check}); forcing single-device trainer to avoid DDP sampler issues."
+        )
+        trainer_params['devices'] = 1
+        trainer_params.pop('strategy', None)
+
+    trainer = pl.Trainer(**trainer_params, callbacks=agent.get_training_callbacks())
     predictions = trainer.predict(AgentLightningModule(agent=agent, combined=False), dataloader, return_predictions=True)
 
     # merge and save
