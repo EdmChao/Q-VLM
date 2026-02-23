@@ -19,7 +19,8 @@ defaults:
   - scorer: pdm_scorer
   - agent: gtrs_diffusion_policy
   - _self_
-  - override train_test_split: navtest
+  # - override train_test_split: navtest
+  - override train_test_split: navhard_two_stage
 
 # Minimal experiment identifiers so Hydra's output_dir can be resolved without extra env vars
 experiment_name: diffusion_inference
@@ -29,7 +30,7 @@ output_dir: ./outputs/${experiment_name}/${experiment_uid}
 # set the environment variable `NAVSIMHARD_PATH` to the folder containing the
 # NavsimHard logs (e.g. /data/.../navsimhard) and this will be used. Otherwise
 # the repo defaults will be used.
-navsim_log_path: ${oc.env:NAVSIMHARD_PATH}
+navsim_log_path: ${oc.env:NAVSIMHARD_PATH}/openscene_meta_datas
 synthetic_sensor_path: ${oc.env:NAVSIMHARD_PATH}/sensor_blobs
 original_sensor_path: ${oc.env:NAVSIMHARD_PATH}/sensor_blobs
 synthetic_scenes_path: ${oc.env:NAVSIMHARD_PATH}/synthetic_scene_pickles

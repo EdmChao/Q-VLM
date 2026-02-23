@@ -73,6 +73,35 @@ def main(cfg: DictConfig) -> None:
     sensor_config=agent.get_sensor_config(),
     )
 
+    # Diagnostic guard: ensure resolved paths look correct and there are log files to load.
+    resolved_navsim_log_path = Path(cfg.navsim_log_path)
+    resolved_original_sensor_path = Path(cfg.original_sensor_path)
+    resolved_synthetic_sensor_path = Path(cfg.synthetic_sensor_path)
+    resolved_synthetic_scenes_path = Path(cfg.synthetic_scenes_path)
+
+    print("Resolved paths:")
+    print(" - navsim_log_path:", resolved_navsim_log_path)
+    print(" - original_sensor_path:", resolved_original_sensor_path)
+    print(" - synthetic_sensor_path:", resolved_synthetic_sensor_path)
+    print(" - synthetic_scenes_path:", resolved_synthetic_scenes_path)
+    print(" - SUBSCORE_PATH env:", os.getenv('SUBSCORE_PATH'))
+    print(" - DP_PREDS env:", os.getenv('DP_PREDS'))
+
+    if not resolved_navsim_log_path.exists():
+        print(f"ERROR: navsim_log_path does not exist: {resolved_navsim_log_path}")
+        print("Tip: for NavsimHard set navsim_log_path to <NAVSIMHARD_PATH>/openscene_meta_datas")
+        raise SystemExit(1)
+
+    try:
+        num_logs = len(list(resolved_navsim_log_path.iterdir()))
+    except Exception:
+        num_logs = 0
+
+    if num_logs == 0:
+        print(f"ERROR: no log files found in navsim_log_path ({resolved_navsim_log_path}); found 0 files.")
+        print("Check that you're pointing to the directory that contains the original log .pkl files (e.g. openscene_meta_datas).")
+        raise SystemExit(1)
+
     dataset = Dataset(
         scene_loader=scene_loader_inference,
         feature_builders=agent.get_feature_builders(),
