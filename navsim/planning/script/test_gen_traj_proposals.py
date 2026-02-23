@@ -69,7 +69,7 @@ def main(cfg: DictConfig) -> None:
     # Hardcoded relaxed scene filter: 1 history + 1 future frame (2 frames total)
     # This overrides the composed Hydra `train_test_split.scene_filter` for quick testing.
     scene_filter_override = SceneFilter(
-        num_history_frames=1,
+        num_history_frames=2,
         num_future_frames=1,
         frame_interval=1,
         has_route=False,
@@ -143,7 +143,10 @@ def main(cfg: DictConfig) -> None:
             logger.info(f"Using single dataset index {idx}")
         except Exception:
             logger.warning(f"Invalid SINGLE_INDEX={single_index}; running full dataset")
-        
+
+    fb = agent.get_feature_builders()[0]
+    print("[DEBUG] required seq_len:", fb._config.seq_len)
+
     dataloader = DataLoader(dataset, **cfg.dataloader.params, shuffle=False)
 
     # DEBUG: Check dataset length before trainer
