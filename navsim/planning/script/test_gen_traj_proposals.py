@@ -12,6 +12,7 @@ import hydra
 import numpy as np
 import pandas as pd
 import pytorch_lightning as pl
+import torch
 import torch.distributed as dist
 from hydra.utils import instantiate
 from navsim.common.dataclasses import SceneFilter
@@ -114,6 +115,14 @@ def main(cfg: DictConfig) -> None:
         print("Check that you're pointing to the directory that contains the original log .pkl files (e.g. openscene_meta_datas).")
         raise SystemExit(1)
 
+    # DEBUG: Check scene loader tokens before creating dataset
+    print(f"\n[DEBUG] SceneFilter override: {scene_filter_override}")
+    print(f"[DEBUG] SceneLoader tokens count: {len(scene_loader_inference.tokens)}")
+    if len(scene_loader_inference.tokens) > 0:
+        print(f"[DEBUG] First 5 tokens: {scene_loader_inference.tokens[:5]}")
+    else:
+        print("[DEBUG] WARNING: SceneLoader has NO tokens!")
+
     dataset = Dataset(
         scene_loader=scene_loader_inference,
         feature_builders=agent.get_feature_builders(),
@@ -137,6 +146,10 @@ def main(cfg: DictConfig) -> None:
         
     dataloader = DataLoader(dataset, **cfg.dataloader.params, shuffle=False)
 
+    # DEBUG: Check dataset length before trainer
+    print(f"\n[DEBUG] Dataset length: {len(dataset)}")
+    print(f"[DEBUG] Dataloader params: {cfg.dataloader.params}")
+
     # Adjust trainer params to avoid PyTorch Lightning DDP sampler assertion when
     # the dataset is smaller than the number of GPU processes. In that case some
     # ranks would receive zero samples which triggers an AssertionError.
@@ -156,8 +169,14 @@ def main(cfg: DictConfig) -> None:
         logger.warning(
             f"Dataset size ({dataset_len}) < devices ({devices_to_check}); forcing single-device trainer to avoid DDP sampler issues."
         )
+        print(f"[DEBUG] DDP FIX TRIGGERED: Setting devices=1, removing strategy")
         trainer_params['devices'] = 1
         trainer_params.pop('strategy', None)
+    else:
+        print(f"[DEBUG] DDP fix NOT triggered: devices_to_check={devices_to_check}, dataset_len={dataset_len}")
+    
+    print(f"[DEBUG] Final trainer_params: {trainer_params}")
+    print(f"[DEBUG] Available GPUs: {torch.cuda.device_count() if torch.cuda.is_available() else 0}")
 
     trainer = pl.Trainer(**trainer_params, callbacks=agent.get_training_callbacks())
     predictions = trainer.predict(AgentLightningModule(agent=agent, combined=False), dataloader, return_predictions=True)
