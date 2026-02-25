@@ -1,0 +1,44 @@
+#modified from default_run_pdm_score_gpu.yaml
+hydra:
+  run:
+    dir: ${output_dir}
+  output_subdir: ${output_dir}/code/hydra # Store hydra's config breakdown here for debugging
+  searchpath: # Only <exp_dir> in these paths are discoverable
+    - pkg://navsim.planning.script.config.common
+  job:
+    chdir: False
+  hydra_logging:
+    level: ERROR
+  job_logging:
+    level: ERROR
+
+defaults:
+  - default_common
+  - default_evaluation
+  - ddp
+  - scorer: pdm_scorer
+  - agent: gtrs_diffusion_policy
+  - _self_
+  # - override train_test_split: navtest
+  - override train_test_split: navhard_two_stage
+
+# Minimal experiment identifiers so Hydra's output_dir can be resolved without extra env vars
+experiment_name: diffusion_inference
+output_dir: ./outputs/${experiment_name}/${experiment_uid}
+
+# If you want to use the NavsimHard dataset instead of the default navsim_logs,
+# set the environment variable `NAVSIMHARD_PATH` to the folder containing the
+# NavsimHard logs (e.g. /data/.../navsimhard) and this will be used. Otherwise
+# the repo defaults will be used.
+navsim_log_path: ${oc.env:NAVSIMHARD_PATH}/openscene_meta_datas
+synthetic_sensor_path: ${oc.env:NAVSIMHARD_PATH}/sensor_blobs
+original_sensor_path: ${oc.env:NAVSIMHARD_PATH}/sensor_blobs
+synthetic_scenes_path: ${oc.env:NAVSIMHARD_PATH}/synthetic_scene_pickles
+
+simulator:
+  _target_: navsim.planning.simulation.planner.pdm_planner.simulation.pdm_simulator.PDMSimulator
+  _convert_: "all"
+  proposal_sampling: ${proposal_sampling}
+
+#projection related stuff
+selection_method: random

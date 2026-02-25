@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 CONFIG_PATH = "config/pdm_scoring"
-CONFIG_NAME = "diffusion_inference"
+CONFIG_NAME = "diffusion_to_projection"
 
 
 @hydra.main(config_path=CONFIG_PATH, config_name=CONFIG_NAME, version_base=None)
@@ -143,12 +143,27 @@ def main(cfg: DictConfig) -> None:
             dp_np = dp_np[0]
 
         N, HORIZON, DIM = dp_np.shape
-        print(f'Found {N} proposals; clustering to 10 exemplars')
+        print(f'Found {N} proposals; selecting 10 exemplars')
 
         k = 10
-        traj_flat = dp_np.reshape(N, -1)
-        kmeans = KMeans(n_clusters=k, random_state=0, n_init=10).fit(traj_flat)
-        centers = kmeans.cluster_centers_.reshape(k, HORIZON, DIM)
+        # selection method can be controlled via env var TRAJ_SELECTION: 'random' or 'kmeans'
+        # sel_method = os.getenv('TRAJ_SELECTION', 'random').lower()
+        sel_method = cfg.selection_method.lower()
+        if k > N:
+            k = N
+        if sel_method == 'kmeans' and N >= k:
+            traj_flat = dp_np.reshape(N, -1)
+            kmeans = KMeans(n_clusters=k, random_state=0, n_init=10).fit(traj_flat)
+            centers = kmeans.cluster_centers_.reshape(k, HORIZON, DIM)
+        else:
+            # fallback to random sampling to encourage diverse exemplars
+            print(f"Using random sampling for trajectories (method={sel_method})")
+            rng = np.random.RandomState(0)
+            if N >= k:
+                idxs = rng.choice(N, size=k, replace=False)
+            else:
+                idxs = np.arange(N)
+            centers = dp_np[idxs]
 
         # load the scene/frame and reconstruct front-stitched image using same crops as feature builder
         scene = scene_loader.get_scene_from_token(scene_loader.tokens[0])
