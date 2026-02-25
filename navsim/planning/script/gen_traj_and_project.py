@@ -9,6 +9,7 @@ import hydra
 import numpy as np
 import pytorch_lightning as pl
 import cv2
+import torch
 from hydra.utils import instantiate
 from omegaconf import DictConfig
 from sklearn.cluster import KMeans
@@ -72,7 +73,25 @@ def main(cfg: DictConfig) -> None:
 
         dataloader = DataLoader(subset, batch_size=1, shuffle=False)
 
+        # Ensure trainer devices configuration is compatible with small subset size.
         trainer_params = dict(cfg.trainer.params) if cfg.get('trainer') else {}
+        try:
+            requested_devices = trainer_params.get('devices', None)
+            if requested_devices is None:
+                available_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
+                devices_to_check = available_gpus if available_gpus > 0 else 1
+            else:
+                devices_to_check = int(requested_devices)
+        except Exception:
+            devices_to_check = 1
+
+        subset_len = len(subset)
+        if (devices_to_check > 1) and (subset_len < devices_to_check):
+            # force single-device trainer to avoid distributed sampler errors
+            print(f"Dataset size ({subset_len}) < devices ({devices_to_check}); forcing devices=1 to avoid DDP sampler issues.")
+            trainer_params['devices'] = 1
+            trainer_params.pop('strategy', None)
+
         trainer = pl.Trainer(**trainer_params, callbacks=agent.get_training_callbacks())
 
         predictions = trainer.predict(AgentLightningModule(agent=agent, combined=False), dataloader, return_predictions=True)
