@@ -43,6 +43,12 @@ class DPConfig(TransfuserConfig):
     denoising_timesteps: int = 100
     use_temporal_bev_kv: bool = False
 
+    # sampling controls to increase/decrease proposal diversity at inference
+    #  - sampling_noise_scale: multiply initial Gaussian noise ( >1 => more diverse)
+    #  - sampling_inference_steps: if >0, override the number of denoising steps used at inference
+    sampling_noise_scale: float = 1.5
+    sampling_inference_steps: int = 0
+
     seq_len: int = 2
     trajectory_imi_weight: float = 1.0
     trajectory_pdm_weight = {

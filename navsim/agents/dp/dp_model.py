@@ -236,7 +236,14 @@ class DPHead(nn.Module):
                 device=condition.device,
             )
 
-            self.noise_scheduler.set_timesteps(self.num_inference_steps)
+            # allow overriding number of inference timesteps for noisier / faster sampling
+            num_steps = self.config.sampling_inference_steps if getattr(self.config, 'sampling_inference_steps', 0) > 0 else self.num_inference_steps
+            self.noise_scheduler.set_timesteps(num_steps)
+
+            # allow scaling initial noise to produce more diverse / unrealistic proposals
+            noise_scale = getattr(self.config, 'sampling_noise_scale', 1.0)
+            if noise_scale != 1.0:
+                noise = noise * float(noise_scale)
 
             for t in self.noise_scheduler.timesteps:
                 model_output = self.transformer_dp(
