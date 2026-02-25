@@ -46,7 +46,7 @@ class DPConfig(TransfuserConfig):
     # sampling controls to increase/decrease proposal diversity at inference
     #  - sampling_noise_scale: multiply initial Gaussian noise ( >1 => more diverse)
     #  - sampling_inference_steps: if >0, override the number of denoising steps used at inference
-    sampling_noise_scale: float = 1.5
+    sampling_noise_scale: float = 3.0
     sampling_inference_steps: int = 0
 
     seq_len: int = 2
