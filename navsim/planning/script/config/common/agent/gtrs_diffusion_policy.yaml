@@ -28,12 +28,12 @@ config:
   trajectory_imi_weight: 1.0
   num_proposals: 100
 
-  # use_back_view: True
+  use_back_view: True
   #setting to false so that the diffusion model generates trajectories based on
   #stitched front left, front, and front right cameras only
   #this makes it simpler to project the trajectories back onto the
   #stitched image as we don't have to worry about rear cam views at all
-  use_back_view: False
+  # use_back_view: False
   fusion_layers: 3
   progress_weight: 2.0
 
