@@ -41,4 +41,5 @@ simulator:
   proposal_sampling: ${proposal_sampling}
 
 #projection related stuff
-selection_method: random
+#random for random selection, kmeans for k-means, and ff for farthest-first
+selection_method: ff

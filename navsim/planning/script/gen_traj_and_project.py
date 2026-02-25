@@ -155,6 +155,27 @@ def main(cfg: DictConfig) -> None:
             traj_flat = dp_np.reshape(N, -1)
             kmeans = KMeans(n_clusters=k, random_state=0, n_init=10).fit(traj_flat)
             centers = kmeans.cluster_centers_.reshape(k, HORIZON, DIM)
+        elif sel_method in ('ff', 'farthest_first'):
+            # greedy farthest-first (k-center) selection on flattened trajectories
+            print(f"Using farthest-first sampling for trajectories (method={sel_method})")
+            traj_flat = dp_np.reshape(N, -1)
+            rng = np.random.RandomState(0)
+            if N <= k:
+                centers = dp_np.copy()
+            else:
+                # start from a random seed index for determinism
+                first_idx = int(rng.randint(0, N))
+                selected = [first_idx]
+                for _ in range(1, k):
+                    # compute distance to nearest selected center for each candidate
+                    # shape: (N, len(selected)) -> min over axis=1
+                    dists = np.linalg.norm(traj_flat[:, None, :] - traj_flat[selected][None, :, :], axis=2)
+                    min_dists = np.min(dists, axis=1)
+                    # mask already selected to avoid reselecting
+                    min_dists[selected] = -1.0
+                    next_idx = int(np.argmax(min_dists))
+                    selected.append(next_idx)
+                centers = dp_np[selected]
         else:
             # fallback to random sampling to encourage diverse exemplars
             print(f"Using random sampling for trajectories (method={sel_method})")
@@ -290,7 +311,7 @@ def main(cfg: DictConfig) -> None:
         else:
             overlay_dir = Path(out_dir) / f"{k}_proposals"
         overlay_dir.mkdir(parents=True, exist_ok=True)
-        out_img_path = overlay_dir / f"traj_overlay_{token}.png"
+        out_img_path = overlay_dir / f"traj_overlay_{k}_{token}.png"
         cv2.imwrite(str(out_img_path), out_img)
         print(f'Wrote overlay image to {out_img_path}')
 
