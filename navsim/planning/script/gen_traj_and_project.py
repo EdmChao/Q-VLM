@@ -145,7 +145,7 @@ def main(cfg: DictConfig) -> None:
         N, HORIZON, DIM = dp_np.shape
         print(f'Found {N} proposals; selecting 10 exemplars')
 
-        k = 10
+        k = 5
         # selection method can be controlled via env var TRAJ_SELECTION: 'random' or 'kmeans'
         # sel_method = os.getenv('TRAJ_SELECTION', 'random').lower()
         sel_method = cfg.selection_method.lower()
@@ -288,14 +288,14 @@ def main(cfg: DictConfig) -> None:
         if out_dir is None:
             overlay_dir = Path.cwd()
         else:
-            overlay_dir = Path(out_dir) / "10_proposals"
+            overlay_dir = Path(out_dir) / f"{k}_proposals"
         overlay_dir.mkdir(parents=True, exist_ok=True)
         out_img_path = overlay_dir / f"traj_overlay_{token}.png"
         cv2.imwrite(str(out_img_path), out_img)
         print(f'Wrote overlay image to {out_img_path}')
 
         # save polyline strings to a text file next to the image
-        out_txt_path = overlay_dir / f"traj_overlay_{token}.txt"
+        out_txt_path = overlay_dir / f"traj_overlay_{k}_{token}.txt"
         with open(out_txt_path, 'w') as ftxt:
             for line in polyline_strings:
                 ftxt.write(line + "\n")

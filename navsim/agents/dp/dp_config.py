@@ -30,7 +30,8 @@ NAVSIM_DEVKIT_ROOT = os.environ.get("NAVSIM_DEVKIT_ROOT")
 class DPConfig(TransfuserConfig):
     scheduler: str = 'default'
 
-    num_proposals: int = 100
+    #100 - 150
+    num_proposals: int = 150
 
     dp_layers: int = 5
     dp_loss_weight: float = 10.0
@@ -46,7 +47,8 @@ class DPConfig(TransfuserConfig):
     # sampling controls to increase/decrease proposal diversity at inference
     #  - sampling_noise_scale: multiply initial Gaussian noise ( >1 => more diverse)
     #  - sampling_inference_steps: if >0, override the number of denoising steps used at inference
-    sampling_noise_scale: float = 3.0
+    sampling_noise_scale: float = 5.0
+    #1.0 - 1.5 - 3.0 - 5.0
     sampling_inference_steps: int = 0
 
     seq_len: int = 2
