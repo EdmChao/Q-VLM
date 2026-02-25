@@ -232,6 +232,20 @@ def main(cfg: DictConfig) -> None:
 
 
         colors = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0), (255, 0, 255), (0, 255, 255), (128, 0, 128), (0, 128, 128), (128, 128, 0), (64, 128, 192)]
+        color_names = [
+            "red",
+            "green",
+            "blue",
+            "yellow",
+            "magenta",
+            "cyan",
+            "purple",
+            "teal",
+            "olive",
+            "steelblue",
+        ]
+
+        polyline_strings = []
 
         for i in range(k):
             pts = []
@@ -246,15 +260,31 @@ def main(cfg: DictConfig) -> None:
             elif len(pts) == 1:
                 cv2.circle(out_img, tuple(pts[0]), 3, colors[i % len(colors)], -1)
 
-        #want to store in our /exp folder
+            # build string representation for this trajectory
+            if len(pts) > 0:
+                coord_str = ";".join([f"{int(x)},{int(y)}" for (x, y) in pts])
+            else:
+                coord_str = ""
+            color_str = color_names[i % len(color_names)]
+            polyline_strings.append(f"{color_str}: {coord_str}")
+
+        # want to store in our /exp folder
         out_dir = os.getenv('NAVSIM_EXP_ROOT')
-        out_name = None
         if out_dir is None:
-            out_name = Path.cwd() / f"traj_overlay_{token}.png"
+            overlay_dir = Path.cwd()
         else:
-            out_name = out_dir / "10_proposals"/f"traj_overlay_{token}.png"
-        cv2.imwrite(str(out_name), out_img)
-        print(f'Wrote overlay image to {out_name}')
+            overlay_dir = Path(out_dir) / "10_proposals"
+        overlay_dir.mkdir(parents=True, exist_ok=True)
+        out_img_path = overlay_dir / f"traj_overlay_{token}.png"
+        cv2.imwrite(str(out_img_path), out_img)
+        print(f'Wrote overlay image to {out_img_path}')
+
+        # save polyline strings to a text file next to the image
+        out_txt_path = overlay_dir / f"traj_overlay_{token}.txt"
+        with open(out_txt_path, 'w') as ftxt:
+            for line in polyline_strings:
+                ftxt.write(line + "\n")
+        print(f'Wrote trajectory strings to {out_txt_path}')
 
     except Exception:
         traceback.print_exc()
