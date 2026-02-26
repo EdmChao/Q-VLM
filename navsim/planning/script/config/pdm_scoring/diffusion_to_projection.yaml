@@ -40,6 +40,12 @@ simulator:
   _convert_: "all"
   proposal_sampling: ${proposal_sampling}
 
+#gneration related stuff
+#all to generate proposals for all data, one to generate for one example
+generate_count: all
+
 #projection related stuff
+#determine how many exemplar trajectories to sample
+k: 5
 #random for random selection, kmeans for k-means, and ff for farthest-first
 selection_method: ff

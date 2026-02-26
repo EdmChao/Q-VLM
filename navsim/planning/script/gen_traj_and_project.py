@@ -65,13 +65,22 @@ def main(cfg: DictConfig) -> None:
         if len(dataset) == 0:
             raise SystemExit("Dataset empty - nothing to run")
 
-        # restrict to first item only for quick test
+        # restrict to first item only for quick test (or use all, based on cfg.generate_count)
         from torch.utils.data import Subset, DataLoader
-        print("Extracting first element from dataset for testing!")
-        subset = Subset(dataset, [0])
         fb = agent.get_feature_builders()[0]
 
-        dataloader = DataLoader(subset, batch_size=1, shuffle=False)
+        gen_count = str(cfg.get('generate_count', 'one')).lower()
+        if gen_count == 'one':
+            print("Extracting first element from dataset for testing!")
+            subset = Subset(dataset, [0])
+            dataloader = DataLoader(subset, batch_size=1, shuffle=False)
+        elif gen_count == 'all':
+            print("Processing all samples in dataset")
+            dataloader = DataLoader(dataset, batch_size=1, shuffle=False)
+        else:
+            print(f"Unknown generate_count '{gen_count}'; defaulting to 'one'")
+            subset = Subset(dataset, [0])
+            dataloader = DataLoader(subset, batch_size=1, shuffle=False)
 
         # Ensure trainer devices configuration is compatible with small subset size.
         trainer_params = dict(cfg.trainer.params) if cfg.get('trainer') else {}
@@ -112,79 +121,79 @@ def main(cfg: DictConfig) -> None:
         
         print("proposal predictions created")
 
-        # pick first merged entry
-        token = list(merged.keys())[0]
-        result = merged[token]
+        # decide which tokens to process based on generate_count
+        gen_count = str(cfg.get('generate_count', 'one')).lower()
+        if gen_count == 'all':
+            tokens_to_process = list(merged.keys())
+        else:
+            tokens_to_process = [list(merged.keys())[0]]
 
-        # extract dp proposals (look for 'dp_pred')
-        dp_pred = None
-        if isinstance(result, dict):
-            dp_pred = result.get('dp_pred', None)
+        for token in tokens_to_process:
+            result = merged[token]
+
+            # extract dp proposals (look for 'dp_pred')
+            dp_pred = None
+            if isinstance(result, dict):
+                dp_pred = result.get('dp_pred', None)
+                if dp_pred is None:
+                    # fallback: find first array-like
+                    for v in result.values():
+                        if hasattr(v, 'shape'):
+                            dp_pred = v
+                            break
+
             if dp_pred is None:
-                # fallback: find first array-like
-                for v in result.values():
-                    if hasattr(v, 'shape'):
-                        dp_pred = v
-                        break
+                print(f'No trajectory proposals found in prediction for token {token}')
+                continue
 
-        if dp_pred is None:
-            print('No trajectory proposals found in prediction')
-            return
+            print(f"normalizing proposals for token {token}")
 
-
-        print("normalizing proposals")
-
-        # convert to numpy and normalize shape to (N, H, D)
-        if hasattr(dp_pred, 'cpu'):
-            dp_np = dp_pred.cpu().numpy()
-        else:
-            dp_np = np.array(dp_pred)
-        if dp_np.ndim == 4:
-            dp_np = dp_np[0]
-
-        N, HORIZON, DIM = dp_np.shape
-        print(f'Found {N} proposals; selecting 10 exemplars')
-
-        k = 5
-        # selection method can be controlled via env var TRAJ_SELECTION: 'random' or 'kmeans'
-        # sel_method = os.getenv('TRAJ_SELECTION', 'random').lower()
-        sel_method = cfg.selection_method.lower()
-        if k > N:
-            k = N
-        if sel_method == 'kmeans' and N >= k:
-            traj_flat = dp_np.reshape(N, -1)
-            kmeans = KMeans(n_clusters=k, random_state=0, n_init=10).fit(traj_flat)
-            centers = kmeans.cluster_centers_.reshape(k, HORIZON, DIM)
-        elif sel_method in ('ff', 'farthest_first'):
-            # greedy farthest-first (k-center) selection on flattened trajectories
-            print(f"Using farthest-first sampling for trajectories (method={sel_method})")
-            traj_flat = dp_np.reshape(N, -1)
-            rng = np.random.RandomState(0)
-            if N <= k:
-                centers = dp_np.copy()
+            # convert to numpy and normalize shape to (N, H, D)
+            if hasattr(dp_pred, 'cpu'):
+                dp_np = dp_pred.cpu().numpy()
             else:
-                # start from a random seed index for determinism
-                first_idx = int(rng.randint(0, N))
-                selected = [first_idx]
-                for _ in range(1, k):
-                    # compute distance to nearest selected center for each candidate
-                    # shape: (N, len(selected)) -> min over axis=1
-                    dists = np.linalg.norm(traj_flat[:, None, :] - traj_flat[selected][None, :, :], axis=2)
-                    min_dists = np.min(dists, axis=1)
-                    # mask already selected to avoid reselecting
-                    min_dists[selected] = -1.0
-                    next_idx = int(np.argmax(min_dists))
-                    selected.append(next_idx)
-                centers = dp_np[selected]
-        else:
-            # fallback to random sampling to encourage diverse exemplars
-            print(f"Using random sampling for trajectories (method={sel_method})")
-            rng = np.random.RandomState(0)
-            if N >= k:
-                idxs = rng.choice(N, size=k, replace=False)
+                dp_np = np.array(dp_pred)
+            if dp_np.ndim == 4:
+                dp_np = dp_np[0]
+
+            N, HORIZON, DIM = dp_np.shape
+            print(f'Found {N} proposals for token {token}; selecting 5 exemplars')
+
+            k = cfg.k
+            sel_method = cfg.selection_method.lower()
+            if k > N:
+                k = N
+            if sel_method == 'kmeans' and N >= k:
+                traj_flat = dp_np.reshape(N, -1)
+                kmeans = KMeans(n_clusters=k, random_state=0, n_init=10).fit(traj_flat)
+                centers = kmeans.cluster_centers_.reshape(k, HORIZON, DIM)
+            elif sel_method in ('ff', 'farthest_first'):
+                # greedy farthest-first (k-center) selection on flattened trajectories
+                print(f"Using farthest-first sampling for trajectories (method={sel_method})")
+                traj_flat = dp_np.reshape(N, -1)
+                rng = np.random.RandomState(0)
+                if N <= k:
+                    centers = dp_np.copy()
+                else:
+                    # start from a random seed index for determinism
+                    first_idx = int(rng.randint(0, N))
+                    selected = [first_idx]
+                    for _ in range(1, k):
+                        dists = np.linalg.norm(traj_flat[:, None, :] - traj_flat[selected][None, :, :], axis=2)
+                        min_dists = np.min(dists, axis=1)
+                        min_dists[selected] = -1.0
+                        next_idx = int(np.argmax(min_dists))
+                        selected.append(next_idx)
+                    centers = dp_np[selected]
             else:
-                idxs = np.arange(N)
-            centers = dp_np[idxs]
+                # fallback to random sampling to encourage diverse exemplars
+                print(f"Using random sampling for trajectories (method={sel_method})")
+                rng = np.random.RandomState(0)
+                if N >= k:
+                    idxs = rng.choice(N, size=k, replace=False)
+                else:
+                    idxs = np.arange(N)
+                centers = dp_np[idxs]
 
         # load the scene/frame and reconstruct front-stitched image using same crops as feature builder
         scene = scene_loader.get_scene_from_token(scene_loader.tokens[0])
