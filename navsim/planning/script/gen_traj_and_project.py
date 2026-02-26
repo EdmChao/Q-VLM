@@ -83,18 +83,31 @@ def main(cfg: DictConfig) -> None:
             subset = Subset(dataset, [0])
             dataloader = DataLoader(subset, batch_size=1, shuffle=False)
 
-        # Ensure trainer devices configuration is compatible with small subset size.
+        # Ensure trainer devices configuration is compatible with available hardware and dataset size.
         trainer_params = dict(cfg.trainer.params) if cfg.get('trainer') else {}
+        try:
+            available_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
+        except Exception:
+            available_gpus = 0
+
         try:
             requested_devices = trainer_params.get('devices', None)
             if requested_devices is None:
-                available_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
+                # default: use all GPUs if available else CPU (1)
+                devices_to_check = available_gpus if available_gpus > 0 else 1
+            elif isinstance(requested_devices, str) and requested_devices.lower() in ('auto', 'all'):
                 devices_to_check = available_gpus if available_gpus > 0 else 1
             else:
                 devices_to_check = int(requested_devices)
+                if available_gpus > 0:
+                    devices_to_check = min(devices_to_check, available_gpus)
+                if devices_to_check <= 0:
+                    devices_to_check = 1
+            # record resolved device count back into trainer params so Trainer uses it
+            trainer_params['devices'] = devices_to_check
         except Exception:
             devices_to_check = 1
-
+            trainer_params['devices'] = 1
 
         subset_len = len(subset) if subset is not None else len(dataset)
         if (devices_to_check > 1) and (subset_len < devices_to_check):
@@ -103,9 +116,23 @@ def main(cfg: DictConfig) -> None:
             trainer_params['devices'] = 1
             trainer_params.pop('strategy', None)
 
+        # create trainer and run prediction; guard against distributed failures
         trainer = pl.Trainer(**trainer_params, callbacks=agent.get_training_callbacks())
 
-        predictions = trainer.predict(AgentLightningModule(agent=agent, combined=False), dataloader, return_predictions=True)
+        try:
+            predictions = trainer.predict(AgentLightningModule(agent=agent, combined=False), dataloader, return_predictions=True)
+        except Exception:
+            # try to clean up distributed state if something went wrong
+            traceback.print_exc()
+            try:
+                if torch.distributed.is_initialized():
+                    try:
+                        torch.distributed.destroy_process_group()
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            raise
 
         # merge predictions as in test script
         merged: Dict[str, Dict] = {}
