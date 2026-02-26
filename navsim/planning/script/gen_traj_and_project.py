@@ -69,6 +69,7 @@ def main(cfg: DictConfig) -> None:
         from torch.utils.data import Subset, DataLoader
         fb = agent.get_feature_builders()[0]
 
+        subset = None
         gen_count = str(cfg.get('generate_count', 'one')).lower()
         if gen_count == 'one':
             print("Extracting first element from dataset for testing!")
@@ -94,7 +95,8 @@ def main(cfg: DictConfig) -> None:
         except Exception:
             devices_to_check = 1
 
-        subset_len = len(subset)
+
+        subset_len = len(subset) if subset is not None else len(dataset)
         if (devices_to_check > 1) and (subset_len < devices_to_check):
             # force single-device trainer to avoid distributed sampler errors
             print(f"Dataset size ({subset_len}) < devices ({devices_to_check}); forcing devices=1 to avoid DDP sampler issues.")
@@ -315,17 +317,18 @@ def main(cfg: DictConfig) -> None:
 
         # want to store in our /exp folder
         out_dir = os.getenv('NAVSIM_EXP_ROOT')
+        sel_method = cfg.selection_method.lower()
         if out_dir is None:
-            overlay_dir = Path.cwd()
+            overlay_dir = Path.cwd() / f"{k}_proposals_{sel_method}"
         else:
-            overlay_dir = Path(out_dir) / f"{k}_proposals"
+            overlay_dir = Path(out_dir) / f"{k}_proposals_{sel_method}"
         overlay_dir.mkdir(parents=True, exist_ok=True)
-        out_img_path = overlay_dir / f"traj_overlay_{k}_{token}.png"
+        out_img_path = overlay_dir / f"traj_overlay_{k}_{sel_method}_{token}.png"
         cv2.imwrite(str(out_img_path), out_img)
         print(f'Wrote overlay image to {out_img_path}')
 
         # save polyline strings to a text file next to the image
-        out_txt_path = overlay_dir / f"traj_overlay_{k}_{token}.txt"
+        out_txt_path = overlay_dir / f"traj_overlay_{k}_{sel_method}_{token}.txt"
         with open(out_txt_path, 'w') as ftxt:
             for line in polyline_strings:
                 ftxt.write(line + "\n")
