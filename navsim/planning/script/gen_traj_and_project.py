@@ -85,6 +85,11 @@ def main(cfg: DictConfig) -> None:
 
         # Ensure trainer devices configuration is compatible with available hardware and dataset size.
         trainer_params = dict(cfg.trainer.params) if cfg.get('trainer') else {}
+
+        #debug to find trainer parameters
+        trainer_params_resolved = trainer_params
+        print("Resolved trainer_params:", trainer_params_resolved)
+        trainer = pl.Trainer(**trainer_params_resolved, callbacks=agent.get_training_callbacks())
         try:
             available_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
         except Exception:
@@ -114,6 +119,9 @@ def main(cfg: DictConfig) -> None:
             # force single-device trainer to avoid distributed sampler errors
             print(f"Dataset size ({subset_len}) < devices ({devices_to_check}); forcing devices=1 to avoid DDP sampler issues.")
             trainer_params['devices'] = 1
+            trainer_params.pop('strategy', None)
+        # If resolved devices == 1, ensure no distributed strategy is used
+        if trainer_params.get('devices', 1) <= 1:
             trainer_params.pop('strategy', None)
 
         # create trainer and run prediction; guard against distributed failures

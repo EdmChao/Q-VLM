@@ -42,7 +42,7 @@ simulator:
 
 #gneration related stuff
 #all to generate proposals for all data, one to generate for one example
-generate_count: all
+generate_count: one
 trainer.params.devices: 1
 
 #projection related stuff
