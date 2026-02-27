@@ -84,18 +84,18 @@ def main(cfg: DictConfig) -> None:
             subset = Subset(dataset, [0])
             print(f"Using DataLoader batch_size={batch_size}, num_workers={num_workers}, pin_memory={pin_memory}")
             # dataloader = DataLoader(subset, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=pin_memory)
-            dataloader = DataLoader(dataset, batch_size=1, shuffle=False)
+            dataloader = DataLoader(dataset, batch_size=1, num_workers=4, shuffle=False)
         elif gen_count == 'all':
             print("Processing all samples in dataset")
             print(f"Using DataLoader batch_size={batch_size}, num_workers={num_workers}, pin_memory={pin_memory}")
             # dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=pin_memory)
-            dataloader = DataLoader(dataset, batch_size=1, shuffle=False)
+            dataloader = DataLoader(dataset, batch_size=1, num_workers=4, shuffle=False)
         else:
             print(f"Unknown generate_count '{gen_count}'; defaulting to 'one'")
             subset = Subset(dataset, [0])
             print(f"Using DataLoader batch_size={batch_size}, num_workers={num_workers}, pin_memory={pin_memory}")
             # dataloader = DataLoader(subset, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=pin_memory)
-            dataloader = DataLoader(dataset, batch_size=1, shuffle=False)
+            dataloader = DataLoader(dataset, batch_size=1, num_workers=4, shuffle=False)
 
         # Ensure trainer devices configuration is compatible with available hardware and dataset size.
         trainer_params = dict(cfg.trainer.params) if cfg.get('trainer') else {}
