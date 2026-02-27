@@ -86,10 +86,7 @@ def main(cfg: DictConfig) -> None:
         # Ensure trainer devices configuration is compatible with available hardware and dataset size.
         trainer_params = dict(cfg.trainer.params) if cfg.get('trainer') else {}
 
-        #debug to find trainer parameters
-        trainer_params_resolved = trainer_params
-        print("Resolved trainer_params:", trainer_params_resolved)
-        trainer = pl.Trainer(**trainer_params_resolved, callbacks=agent.get_training_callbacks())
+        # debug: will print resolved trainer params after resolving devices/strategy
         try:
             available_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
         except Exception:
@@ -125,6 +122,7 @@ def main(cfg: DictConfig) -> None:
             trainer_params.pop('strategy', None)
 
         # create trainer and run prediction; guard against distributed failures
+        print("Resolved trainer_params:", trainer_params)
         trainer = pl.Trainer(**trainer_params, callbacks=agent.get_training_callbacks())
 
         try:
