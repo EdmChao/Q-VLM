@@ -42,7 +42,7 @@ simulator:
 
 #gneration related stuff
 #all to generate proposals for all data, one to generate for one example
-generate_count: one
+generate_count: all
 
 #projection related stuff
 #determine how many exemplar trajectories to sample
