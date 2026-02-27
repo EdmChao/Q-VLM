@@ -70,18 +70,29 @@ def main(cfg: DictConfig) -> None:
         fb = agent.get_feature_builders()[0]
 
         subset = None
+        # resolve dataloader params from config
+        dl_cfg = None
+        if cfg.get('dataloader') and cfg.dataloader.get('params'):
+            dl_cfg = cfg.dataloader.params
+        batch_size = int(dl_cfg.get('batch_size', 1)) if dl_cfg is not None else 1
+        num_workers = int(dl_cfg.get('num_workers', 0)) if dl_cfg is not None else 0
+        pin_memory = bool(dl_cfg.get('pin_memory', False)) if dl_cfg is not None else False
+
         gen_count = str(cfg.get('generate_count', 'one')).lower()
         if gen_count == 'one':
             print("Extracting first element from dataset for testing!")
             subset = Subset(dataset, [0])
-            dataloader = DataLoader(subset, batch_size=1, shuffle=False)
+            print(f"Using DataLoader batch_size={batch_size}, num_workers={num_workers}, pin_memory={pin_memory}")
+            dataloader = DataLoader(subset, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=pin_memory)
         elif gen_count == 'all':
             print("Processing all samples in dataset")
-            dataloader = DataLoader(dataset, batch_size=1, shuffle=False)
+            print(f"Using DataLoader batch_size={batch_size}, num_workers={num_workers}, pin_memory={pin_memory}")
+            dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=pin_memory)
         else:
             print(f"Unknown generate_count '{gen_count}'; defaulting to 'one'")
             subset = Subset(dataset, [0])
-            dataloader = DataLoader(subset, batch_size=1, shuffle=False)
+            print(f"Using DataLoader batch_size={batch_size}, num_workers={num_workers}, pin_memory={pin_memory}")
+            dataloader = DataLoader(subset, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=pin_memory)
 
         # Ensure trainer devices configuration is compatible with available hardware and dataset size.
         trainer_params = dict(cfg.trainer.params) if cfg.get('trainer') else {}
