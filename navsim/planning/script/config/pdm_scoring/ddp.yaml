@@ -22,8 +22,8 @@ trainer:
 
     accelerator: gpu # distribution method
     #disable ddp for debugging full data run on 1 gpu
-    # strategy: ddp
-    strategy: None
+    strategy: ddp
+    # strategy: None
     precision: 32 # floating point precision
     num_nodes: 1 # Number of nodes used for training
 
@@ -36,4 +36,4 @@ trainer:
     gradient_clip_algorithm: norm # [value, norm] method to clip gradients\
 
     #number of gpus to run on
-    devices: 1
+    devices: 4
