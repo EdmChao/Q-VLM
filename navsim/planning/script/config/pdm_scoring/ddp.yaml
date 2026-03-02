@@ -36,4 +36,4 @@ trainer:
     gradient_clip_algorithm: norm # [value, norm] method to clip gradients\
 
     #number of gpus to run on
-    devices: 8
+    devices: 4
