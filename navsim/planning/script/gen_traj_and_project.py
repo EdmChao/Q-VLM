@@ -104,24 +104,25 @@ def make_stitched_and_projector(scene, fb):
 
 
 def draw_trajectories_and_save(out_img, project_fn, centers, token, cfg, k):
-    colors = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0), (255, 0, 255), (0, 255, 255), (128, 0, 128), (0, 128, 128), (128, 128, 0), (64, 128, 192)]
-    color_names = [
-        "red",
-        "green",
-        "blue",
-        "yellow",
-        "magenta",
-        "cyan",
-        "purple",
-        "teal",
-        "olive",
-        "steelblue",
+    # Map color names to BGR tuples for OpenCV
+    color_map = [
+        ("red", (0, 0, 255)),
+        ("green", (0, 255, 0)),
+        ("blue", (255, 0, 0)),
+        ("yellow", (0, 255, 255)),
+        ("magenta", (255, 0, 255)),
+        ("cyan", (255, 255, 0)),
+        ("purple", (128, 0, 128)),
+        ("teal", (128, 128, 0)),
+        ("olive", (0, 128, 128)),
+        ("steelblue", (192, 128, 64)),
     ]
 
     polyline_strings = []
     HORIZON = centers.shape[1]
 
     for i in range(k):
+        color_str, color_bgr = color_map[i % len(color_map)]
         pts = []
         for t in range(HORIZON):
             xy = centers[i, t][:2]
@@ -130,15 +131,14 @@ def draw_trajectories_and_save(out_img, project_fn, centers, token, cfg, k):
                 pts.append(p)
         if len(pts) >= 2:
             pts_arr = np.array(pts, dtype=np.int32)
-            cv2.polylines(out_img, [pts_arr], isClosed=False, color=colors[i % len(colors)], thickness=2)
+            cv2.polylines(out_img, [pts_arr], isClosed=False, color=color_bgr, thickness=2)
         elif len(pts) == 1:
-            cv2.circle(out_img, tuple(pts[0]), 3, colors[i % len(colors)], -1)
+            cv2.circle(out_img, tuple(pts[0]), 3, color_bgr, -1)
 
         if len(pts) > 0:
             coord_str = ";".join([f"{int(x)},{int(y)}" for (x, y) in pts])
         else:
             coord_str = ""
-        color_str = color_names[i % len(color_names)]
         polyline_strings.append(f"{color_str}: {coord_str}")
 
     out_dir = os.getenv('NAVSIM_EXP_ROOT')
@@ -157,6 +157,82 @@ def draw_trajectories_and_save(out_img, project_fn, centers, token, cfg, k):
         for line in polyline_strings:
             ftxt.write(line + "\n")
     print(f'Wrote trajectory strings to {out_txt_path}')
+
+
+def select_centorids(dp_np, k, sel_method, rng_seed=0, min_total_disp=0.0, dedup_tol=1e-2):
+    """Select up to k representative trajectories from dp_np.
+
+    - dp_np: (N, H, D) numpy array of proposals
+    - k: desired number of centers
+    - sel_method: 'kmeans', 'ff' (farthest-first) or others (random)
+    - rng_seed: deterministic seed for random choices
+    - min_total_disp: minimum total displacement to keep a proposal (world units)
+    - dedup_tol: tolerance for deduplication (fractional rounding)
+
+    Returns: centers array shaped (k_out, H, D) where k_out <= k
+    """
+    N = dp_np.shape[0]
+    if N == 0:
+        return dp_np
+
+    # compute total displacement per trajectory (use xy)
+    traj_xy = dp_np[..., :2]
+    if traj_xy.shape[1] > 1:
+        step_dists = np.linalg.norm(np.diff(traj_xy, axis=1), axis=2)
+        total_disp = step_dists.sum(axis=1)
+    else:
+        total_disp = np.zeros((N,))
+
+    keep_mask = total_disp >= float(min_total_disp)
+    if keep_mask.sum() == 0:
+        # nothing passes filter; fallback to original proposals but log
+        print(f"select_centorids: no proposals passed min_total_disp={min_total_disp}; using all {N} proposals")
+        cand = dp_np
+    else:
+        cand = dp_np[keep_mask]
+
+    # deduplicate by coarse rounding of flattened trajectories
+    if dedup_tol is not None and cand.shape[0] > 1:
+        flat = np.round(cand.reshape(cand.shape[0], -1) / float(dedup_tol)).astype(np.int64)
+        _, unique_idx = np.unique(flat, axis=0, return_index=True)
+        cand = cand[sorted(unique_idx)]
+
+    M = cand.shape[0]
+    if M == 0:
+        print("select_centorids: no candidate proposals after deduplication; returning empty array")
+        return cand
+
+    k_out = min(int(k), M)
+
+    sel_method_l = str(sel_method).lower()
+    if sel_method_l == 'kmeans' and M >= k_out:
+        traj_flat = cand.reshape(M, -1)
+        kmeans = KMeans(n_clusters=k_out, random_state=int(rng_seed), n_init=10).fit(traj_flat)
+        centers = kmeans.cluster_centers_.reshape(k_out, cand.shape[1], cand.shape[2])
+    elif sel_method_l in ('ff', 'farthest_first'):
+        traj_flat = cand.reshape(M, -1)
+        rng = np.random.RandomState(int(rng_seed))
+        if M <= k_out:
+            centers = cand.copy()
+        else:
+            first_idx = int(rng.randint(0, M))
+            selected = [first_idx]
+            for _ in range(1, k_out):
+                dists = np.linalg.norm(traj_flat[:, None, :] - traj_flat[selected][None, :, :], axis=2)
+                min_dists = np.min(dists, axis=1)
+                min_dists[selected] = -1.0
+                next_idx = int(np.argmax(min_dists))
+                selected.append(next_idx)
+            centers = cand[selected]
+    else:
+        rng = np.random.RandomState(int(rng_seed))
+        if M >= k_out:
+            idxs = rng.choice(M, size=k_out, replace=False)
+        else:
+            idxs = np.arange(M)
+        centers = cand[idxs]
+
+    return centers
 
 
 
@@ -341,41 +417,11 @@ def main(cfg: DictConfig) -> None:
             N, HORIZON, DIM = dp_np.shape
             print(f'Found {N} proposals for token {token}; selecting 5 exemplars')
 
-            k = cfg.k
+            k = int(cfg.k)
             sel_method = cfg.selection_method.lower()
-            if k > N:
-                k = N
-            if sel_method == 'kmeans' and N >= k:
-                traj_flat = dp_np.reshape(N, -1)
-                kmeans = KMeans(n_clusters=k, random_state=0, n_init=10).fit(traj_flat)
-                centers = kmeans.cluster_centers_.reshape(k, HORIZON, DIM)
-            elif sel_method in ('ff', 'farthest_first'):
-                # greedy farthest-first (k-center) selection on flattened trajectories
-                print(f"Using farthest-first sampling for trajectories (method={sel_method})")
-                traj_flat = dp_np.reshape(N, -1)
-                rng = np.random.RandomState(0)
-                if N <= k:
-                    centers = dp_np.copy()
-                else:
-                    # start from a random seed index for determinism
-                    first_idx = int(rng.randint(0, N))
-                    selected = [first_idx]
-                    for _ in range(1, k):
-                        dists = np.linalg.norm(traj_flat[:, None, :] - traj_flat[selected][None, :, :], axis=2)
-                        min_dists = np.min(dists, axis=1)
-                        min_dists[selected] = -1.0
-                        next_idx = int(np.argmax(min_dists))
-                        selected.append(next_idx)
-                    centers = dp_np[selected]
-            else:
-                # fallback to random sampling to encourage diverse exemplars
-                print(f"Using random sampling for trajectories (method={sel_method})")
-                rng = np.random.RandomState(0)
-                if N >= k:
-                    idxs = rng.choice(N, size=k, replace=False)
-                else:
-                    idxs = np.arange(N)
-                centers = dp_np[idxs]
+            # use select_centorids helper (handles filtering, dedup, and selection)
+            centers = select_centorids(dp_np, k=k, sel_method=sel_method, rng_seed=0)
+            k = centers.shape[0] if centers is not None else 0
 
             scene = scene_loader.get_scene_from_token(token)
             out_img, project_fn = make_stitched_and_projector(scene, fb)
