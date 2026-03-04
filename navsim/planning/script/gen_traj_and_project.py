@@ -156,6 +156,9 @@ def draw_trajectories_and_save(out_img, project_fn, centers, token, cfg, k):
     with open(out_txt_path, 'w') as ftxt:
         for line in polyline_strings:
             ftxt.write(line + "\n")
+        # mark cases where no valid proposals remained
+        if k == 0:
+            ftxt.write("ALL_NAN: True\n")
     print(f'Wrote trajectory strings to {out_txt_path}')
 
 
@@ -191,11 +194,42 @@ def select_centorids(dp_np, k, sel_method, rng_seed=0, min_total_disp=0.0, dedup
     else:
         cand = dp_np[keep_mask]
 
-    # deduplicate by coarse rounding of flattened trajectories
+    # filter out empty / NaN / degenerate proposals
+    def filter_empty_proposals(arr, min_total_disp_local=0.0):
+        M_local = arr.shape[0]
+        if M_local == 0:
+            print("filter_empty_proposals: no candidates to filter")
+            return arr
+        # any NaNs -> invalid
+        flat = arr.reshape(M_local, -1)
+        nan_mask = np.any(np.isnan(flat), axis=1)
+
+        # small total displacement -> invalid
+        traj_xy_local = arr[..., :2]
+        if traj_xy_local.shape[1] > 1:
+            step_dists_local = np.linalg.norm(np.diff(traj_xy_local, axis=1), axis=2)
+            total_disp_local = step_dists_local.sum(axis=1)
+        else:
+            total_disp_local = np.zeros((M_local,))
+        low_disp_mask = total_disp_local < float(min_total_disp_local)
+
+        valid_mask = (~nan_mask) & (~low_disp_mask)
+        num_filtered = int(np.sum(~valid_mask))
+        num_remaining = int(np.sum(valid_mask))
+        print(f"filter_empty_proposals: filtered {num_filtered}; remaining {num_remaining}")
+        if num_remaining == 0:
+            return np.empty((0,) + arr.shape[1:], dtype=arr.dtype)
+        return arr[valid_mask]
+
     if dedup_tol is not None and cand.shape[0] > 1:
         flat = np.round(cand.reshape(cand.shape[0], -1) / float(dedup_tol)).astype(np.int64)
         _, unique_idx = np.unique(flat, axis=0, return_index=True)
         cand = cand[sorted(unique_idx)]
+
+    cand = filter_empty_proposals(cand, min_total_disp)
+    if cand.shape[0] == 0:
+        print("select_centorids: all candidate proposals invalid after filtering")
+        return cand
 
     M = cand.shape[0]
     if M == 0:
@@ -421,7 +455,7 @@ def main(cfg: DictConfig) -> None:
             sel_method = cfg.selection_method.lower()
             # use select_centorids helper (handles filtering, dedup, and selection)
             centers = select_centorids(dp_np, k=k, sel_method=sel_method, rng_seed=0)
-            k = centers.shape[0] if centers is not None else 0
+            k = centers.shape[0] if (centers is not None and centers.shape[0] > 0) else 0
 
             scene = scene_loader.get_scene_from_token(token)
             out_img, project_fn = make_stitched_and_projector(scene, fb)

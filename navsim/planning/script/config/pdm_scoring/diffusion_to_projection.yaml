@@ -40,6 +40,10 @@ simulator:
   _convert_: "all"
   proposal_sampling: ${proposal_sampling}
 
+#override num proposals:
+agent:
+  config:
+    num_proposals: 150
 #gneration related stuff
 #all to generate proposals for all data, one to generate for one example
 generate_count: all
