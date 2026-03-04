@@ -51,8 +51,8 @@ agent:
 #     devices: 4
 #     strategy: dp
 #gneration related stuff
-#all to generate proposals for all data, one to generate for one example
-generate_count: all
+#all to generate proposals for all data, one to generate for one example, int to generate int examples
+generate_count: 50
 
 #projection related stuff
 #determine how many exemplar trajectories to sample
