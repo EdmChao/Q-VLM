@@ -200,26 +200,55 @@ def select_centorids(dp_np, k, sel_method, rng_seed=0, min_total_disp=0.0, dedup
         if M_local == 0:
             print("filter_empty_proposals: no candidates to filter")
             return arr
-        # any NaNs -> invalid
-        flat = arr.reshape(M_local, -1)
-        nan_mask = np.any(np.isnan(flat), axis=1)
 
-        # small total displacement -> invalid
         traj_xy_local = arr[..., :2]
-        if traj_xy_local.shape[1] > 1:
-            step_dists_local = np.linalg.norm(np.diff(traj_xy_local, axis=1), axis=2)
-            total_disp_local = step_dists_local.sum(axis=1)
-        else:
-            total_disp_local = np.zeros((M_local,))
-        low_disp_mask = total_disp_local < float(min_total_disp_local)
+        L = traj_xy_local.shape[1]
 
-        valid_mask = (~nan_mask) & (~low_disp_mask)
-        num_filtered = int(np.sum(~valid_mask))
-        num_remaining = int(np.sum(valid_mask))
-        print(f"filter_empty_proposals: filtered {num_filtered}; remaining {num_remaining}")
+        empty_mask = np.zeros((M_local,), dtype=bool)
+        single_point_mask = np.zeros((M_local,), dtype=bool)
+        low_disp_mask = np.zeros((M_local,), dtype=bool)
+
+        for i in range(M_local):
+            xy = traj_xy_local[i]
+            # valid timesteps where both x and y are finite
+            valid_t = np.isfinite(xy[:, 0]) & np.isfinite(xy[:, 1])
+            n_valid = int(valid_t.sum())
+            if n_valid == 0:
+                empty_mask[i] = True
+                continue
+            if n_valid <= 1:
+                single_point_mask[i] = True
+                continue
+            # compute total displacement across consecutive valid timesteps
+            idx = np.where(valid_t)[0]
+            if len(idx) > 1:
+                seq = xy[idx]
+                step_dists_local = np.linalg.norm(np.diff(seq, axis=0), axis=1)
+                total_disp_local = float(step_dists_local.sum())
+            else:
+                total_disp_local = 0.0
+            if total_disp_local < float(min_total_disp_local):
+                low_disp_mask[i] = True
+
+        # any proposal that has NaNs outside xy (other dims) should also be removed
+        flat = arr.reshape(M_local, -1)
+        any_nan_mask = np.any(~np.isfinite(flat), axis=1)
+
+        # combine masks: remove empties, single-point, low-disp, or any NaN anywhere
+        invalid_mask = empty_mask | single_point_mask | low_disp_mask | any_nan_mask
+
+        num_empty = int(np.sum(empty_mask))
+        num_single = int(np.sum(single_point_mask))
+        num_low_disp = int(np.sum(low_disp_mask))
+        num_any_nan = int(np.sum(any_nan_mask))
+        num_filtered = int(np.sum(invalid_mask))
+        num_remaining = M_local - num_filtered
+
+        print(f"filter_empty_proposals: empty={num_empty}; single_point={num_single}; low_disp={num_low_disp}; any_nan={num_any_nan}; filtered_total={num_filtered}; remaining={num_remaining}")
+
         if num_remaining == 0:
             return np.empty((0,) + arr.shape[1:], dtype=arr.dtype)
-        return arr[valid_mask]
+        return arr[~invalid_mask]
 
     if dedup_tol is not None and cand.shape[0] > 1:
         flat = np.round(cand.reshape(cand.shape[0], -1) / float(dedup_tol)).astype(np.int64)

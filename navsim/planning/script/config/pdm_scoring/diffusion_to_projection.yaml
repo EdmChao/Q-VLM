@@ -44,6 +44,12 @@ simulator:
 agent:
   config:
     num_proposals: 150
+#Experimental training params
+trainer:
+  params:
+    accelerator: gpu
+    devices: 4
+    strategy: dp
 #gneration related stuff
 #all to generate proposals for all data, one to generate for one example
 generate_count: all
