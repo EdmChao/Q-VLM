@@ -389,6 +389,21 @@ def main(cfg: DictConfig) -> None:
             print(f"Using DataLoader batch_size={batch_size}, num_workers={num_workers}, pin_memory={pin_memory}")
             dataloader = DataLoader(subset, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=pin_memory)
             # dataloader = DataLoader(dataset, batch_size=1, num_workers=4, shuffle=False)
+        
+        #check keys
+        # run in your script right after dataloader is created
+        for batch in dataloader:
+            print("batch type:", type(batch))
+            if isinstance(batch, dict):
+                for k,v in batch.items():
+                    print(k, "->", type(v), getattr(v, 'shape', None))
+            elif isinstance(batch, (list, tuple)):
+                print("batch is list/tuple length", len(batch))
+                first = batch[0] if len(batch)>0 else None
+                if isinstance(first, dict):
+                    for k,v in first.items():
+                        print("item[0].", k, "->", type(v), getattr(v, 'shape', None))
+            break
 
         # Ensure trainer devices configuration is compatible with available hardware and dataset size.
         trainer_params = dict(cfg.trainer.params) if cfg.get('trainer') else {}
@@ -464,10 +479,31 @@ def main(cfg: DictConfig) -> None:
         print("proposal predictions created")
 
         # decide which tokens to process based on generate_count
-        # Collect features from dataloader for later use in GTRS scoring
-        print("Collecting features from dataloader...")
-        features_by_token = collect_features_by_token(dataloader)
-        print(f"  Collected features for {len(features_by_token)} tokens")
+        # Build a separate Dataset/DataLoader for GTRS features (camera_feature/status_feature)
+        features_by_token = {}
+        if scorer_agent is not None:
+            print("Building GTRS feature dataset and dataloader...")
+            try:
+                gtrs_dataset = Dataset(
+                    scene_loader=scene_loader,
+                    feature_builders=scorer_agent.get_feature_builders(),
+                    target_builders=scorer_agent.get_target_builders(),
+                    cache_path=None,
+                    force_cache_computation=False,
+                    append_token_to_batch=True,
+                    is_training=False,
+                )
+
+                gtrs_dataloader = DataLoader(gtrs_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=pin_memory)
+                print("Collecting features from GTRS dataloader...")
+                features_by_token = collect_features_by_token(gtrs_dataloader)
+                print(f"  Collected features for {len(features_by_token)} tokens")
+            except Exception:
+                print('Warning: failed to build GTRS dataset/dataloader or collect features')
+                traceback.print_exc()
+                features_by_token = {}
+        else:
+            print('No scorer_agent configured; skipping GTRS feature collection')
 
         gen_count = str(cfg.get('generate_count', 'one')).lower()
         if gen_count == 'all':
