@@ -12,7 +12,6 @@ import cv2
 import torch
 from hydra.utils import instantiate
 from omegaconf import DictConfig
-from sklearn.cluster import KMeans
 
 from navsim.common.dataclasses import SceneFilter
 from navsim.common.dataloader import SceneLoader
@@ -162,140 +161,115 @@ def draw_trajectories_and_save(out_img, project_fn, centers, token, cfg, k):
     print(f'Wrote trajectory strings to {out_txt_path}')
 
 
-def select_centorids(dp_np, k, sel_method, rng_seed=0, min_total_disp=0.0, dedup_tol=1e-2):
-    """Select up to k representative trajectories from dp_np.
-
-    - dp_np: (N, H, D) numpy array of proposals
-    - k: desired number of centers
-    - sel_method: 'kmeans', 'ff' (farthest-first) or others (random)
-    - rng_seed: deterministic seed for random choices
-    - min_total_disp: minimum total displacement to keep a proposal (world units)
-    - dedup_tol: tolerance for deduplication (fractional rounding)
-
-    Returns: centers array shaped (k_out, H, D) where k_out <= k
+def score_and_select_trajectories_gtrs_dense(
+    dp_np: np.ndarray,
+    token: str,
+    gtrs_agent,
+    features: Dict[str, torch.Tensor],
+    k: int,
+) -> tuple:
     """
+    Score trajectory proposals using GTRS-Dense neural network and select top-k by overall score.
+    
+    Args:
+        dp_np: (N, H, D) numpy array of proposals in ego-frame (relative coordinates)
+        token: scene token for logging
+        gtrs_agent: GTRSAgent instance with evaluate_dp_proposals method
+        features: dict with 'camera_feature' and 'status_feature' tensors
+        k: number of top proposals to select
+    
+    Returns:
+        tuple of (centers, scores) where centers is (k_out, H, D) and scores is (k_out,)
+    """
+
+    print(f"GTRS-Dense scoring {dp_np.shape[0]} proposals for token {token}")
+
     N = dp_np.shape[0]
     if N == 0:
-        return dp_np
+        print(f"  No proposals to score")
+        return np.empty((0, dp_np.shape[1], dp_np.shape[2])), np.array([])
 
-    # compute total displacement per trajectory (use xy)
-    traj_xy = dp_np[..., :2]
-    if traj_xy.shape[1] > 1:
-        step_dists = np.linalg.norm(np.diff(traj_xy, axis=1), axis=2)
-        total_disp = step_dists.sum(axis=1)
+    # Convert numpy proposals to torch tensor (keep in ego-frame format)
+    dp_torch = torch.from_numpy(dp_np).float()  # (N, H, D)
+
+    # Call GTRS-Dense scorer
+    print(f"  Scoring {N} proposals with GTRS-Dense model")
+    try:
+        with torch.no_grad():
+            # Move features to same device as model
+            device = next(gtrs_agent.parameters()).device
+            features_device = {
+                k_feat: v.to(device) if isinstance(v, torch.Tensor) else v
+                for k_feat, v in features.items()
+            }
+            dp_torch = dp_torch.to(device)
+
+            # Call the GTRS scorer's evaluate_dp_proposals method
+            result = gtrs_agent.evaluate_dp_proposals(
+                features=features_device,
+                dp_proposals=dp_torch,
+                topk=k,
+                dp_only_inference=True  # We only care about DP proposals, not vocabulary
+            )
+    except Exception as e:
+        print(f"  Error during GTRS scoring: {e}")
+        traceback.print_exc()
+        return np.empty((0, dp_np.shape[1], dp_np.shape[2])), np.array([])
+
+    # Extract scores
+    if 'overall_log_scores' in result:
+        scores_arr = result['overall_log_scores'].cpu().numpy().flatten()
+    elif 'overall_scores' in result:
+        scores_arr = result['overall_scores'].cpu().numpy().flatten()
     else:
-        total_disp = np.zeros((N,))
-
-    keep_mask = total_disp >= float(min_total_disp)
-    if keep_mask.sum() == 0:
-        # nothing passes filter; fallback to original proposals but log
-        print(f"select_centorids: no proposals passed min_total_disp={min_total_disp}; using all {N} proposals")
-        cand = dp_np
-    else:
-        cand = dp_np[keep_mask]
-
-    # filter out empty / NaN / degenerate proposals
-    def filter_empty_proposals(arr, min_total_disp_local=0.0):
-        M_local = arr.shape[0]
-        if M_local == 0:
-            print("filter_empty_proposals: no candidates to filter")
-            return arr
-
-        traj_xy_local = arr[..., :2]
-        L = traj_xy_local.shape[1]
-
-        empty_mask = np.zeros((M_local,), dtype=bool)
-        single_point_mask = np.zeros((M_local,), dtype=bool)
-        low_disp_mask = np.zeros((M_local,), dtype=bool)
-
-        for i in range(M_local):
-            xy = traj_xy_local[i]
-            # valid timesteps where both x and y are finite
-            valid_t = np.isfinite(xy[:, 0]) & np.isfinite(xy[:, 1])
-            n_valid = int(valid_t.sum())
-            if n_valid == 0:
-                empty_mask[i] = True
-                continue
-            if n_valid <= 1:
-                single_point_mask[i] = True
-                continue
-            # compute total displacement across consecutive valid timesteps
-            idx = np.where(valid_t)[0]
-            if len(idx) > 1:
-                seq = xy[idx]
-                step_dists_local = np.linalg.norm(np.diff(seq, axis=0), axis=1)
-                total_disp_local = float(step_dists_local.sum())
-            else:
-                total_disp_local = 0.0
-            if total_disp_local < float(min_total_disp_local):
-                low_disp_mask[i] = True
-
-        # any proposal that has NaNs outside xy (other dims) should also be removed
-        flat = arr.reshape(M_local, -1)
-        any_nan_mask = np.any(~np.isfinite(flat), axis=1)
-
-        # combine masks: remove empties, single-point, low-disp, or any NaN anywhere
-        invalid_mask = empty_mask | single_point_mask | low_disp_mask | any_nan_mask
-
-        num_empty = int(np.sum(empty_mask))
-        num_single = int(np.sum(single_point_mask))
-        num_low_disp = int(np.sum(low_disp_mask))
-        num_any_nan = int(np.sum(any_nan_mask))
-        num_filtered = int(np.sum(invalid_mask))
-        num_remaining = M_local - num_filtered
-
-        print(f"filter_empty_proposals: empty={num_empty}; single_point={num_single}; low_disp={num_low_disp}; any_nan={num_any_nan}; filtered_total={num_filtered}; remaining={num_remaining}")
-
-        if num_remaining == 0:
-            return np.empty((0,) + arr.shape[1:], dtype=arr.dtype)
-        return arr[~invalid_mask]
-
-    if dedup_tol is not None and cand.shape[0] > 1:
-        flat = np.round(cand.reshape(cand.shape[0], -1) / float(dedup_tol)).astype(np.int64)
-        _, unique_idx = np.unique(flat, axis=0, return_index=True)
-        cand = cand[sorted(unique_idx)]
-
-    cand = filter_empty_proposals(cand, min_total_disp)
-    if cand.shape[0] == 0:
-        print("select_centorids: all candidate proposals invalid after filtering")
-        return cand
-
-    M = cand.shape[0]
-    if M == 0:
-        print("select_centorids: no candidate proposals after deduplication; returning empty array")
-        return cand
-
-    k_out = min(int(k), M)
-
-    sel_method_l = str(sel_method).lower()
-    if sel_method_l == 'kmeans' and M >= k_out:
-        traj_flat = cand.reshape(M, -1)
-        kmeans = KMeans(n_clusters=k_out, random_state=int(rng_seed), n_init=10).fit(traj_flat)
-        centers = kmeans.cluster_centers_.reshape(k_out, cand.shape[1], cand.shape[2])
-    elif sel_method_l in ('ff', 'farthest_first'):
-        traj_flat = cand.reshape(M, -1)
-        rng = np.random.RandomState(int(rng_seed))
-        if M <= k_out:
-            centers = cand.copy()
+        print("  Warning: no overall_scores in result; using sum of sub-scores")
+        # Fallback: combine sub-scores manually
+        sub_scores = {}
+        for key in ['no_at_fault_collisions', 'drivable_area_compliance', 'ego_progress', 'lane_keeping']:
+            if key in result:
+                sub_scores[key] = result[key].cpu().numpy().flatten()
+        if sub_scores:
+            scores_arr = np.sum(list(sub_scores.values()), axis=0)
         else:
-            first_idx = int(rng.randint(0, M))
-            selected = [first_idx]
-            for _ in range(1, k_out):
-                dists = np.linalg.norm(traj_flat[:, None, :] - traj_flat[selected][None, :, :], axis=2)
-                min_dists = np.min(dists, axis=1)
-                min_dists[selected] = -1.0
-                next_idx = int(np.argmax(min_dists))
-                selected.append(next_idx)
-            centers = cand[selected]
-    else:
-        rng = np.random.RandomState(int(rng_seed))
-        if M >= k_out:
-            idxs = rng.choice(M, size=k_out, replace=False)
-        else:
-            idxs = np.arange(M)
-        centers = cand[idxs]
+            scores_arr = np.ones(N)
 
-    return centers
+    # Select top-k by score
+    k_out = min(k, len(scores_arr))
+    top_k_indices = np.argsort(scores_arr)[-k_out:][::-1]  # descending
+
+    centers = dp_np[top_k_indices]  # Return in original ego-frame format
+    scores = scores_arr[top_k_indices]
+
+    print(f"  Selected top {k_out} proposals by GTRS-Dense score")
+    print(f"  GTRS scores: {scores}")
+
+    return centers, scores
+
+
+def collect_features_by_token(dataloader):
+    """
+    Iterate through dataloader and build a mapping of token -> features.
+    
+    Returns:
+        dict mapping token -> {'camera_feature': tensor, 'status_feature': tensor}
+    """
+    features_by_token = {}
+    with torch.no_grad():
+        for batch in dataloader:
+            tokens = batch.get('token', [])
+            camera_feat = batch.get('camera_feature', None)
+            status_feat = batch.get('status_feature', None)
+            
+            if camera_feat is not None and status_feat is not None:
+                batch_size = camera_feat.shape[0] if hasattr(camera_feat, 'shape') else len(tokens)
+                for i in range(batch_size):
+                    if i < len(tokens):
+                        token = tokens[i]
+                        features_by_token[token] = {
+                            'camera_feature': camera_feat[i:i+1] if hasattr(camera_feat, '__getitem__') else camera_feat,
+                            'status_feature': status_feat[i:i+1] if hasattr(status_feat, '__getitem__') else status_feat,
+                        }
+    return features_by_token
 
 
 
@@ -443,6 +417,11 @@ def main(cfg: DictConfig) -> None:
         print("proposal predictions created")
 
         # decide which tokens to process based on generate_count
+        # Collect features from dataloader for later use in GTRS scoring
+        print("Collecting features from dataloader...")
+        features_by_token = collect_features_by_token(dataloader)
+        print(f"  Collected features for {len(features_by_token)} tokens")
+
         gen_count = str(cfg.get('generate_count', 'one')).lower()
         if gen_count == 'all':
             tokens_to_process = list(merged.keys())
@@ -478,12 +457,24 @@ def main(cfg: DictConfig) -> None:
                 dp_np = dp_np[0]
 
             N, HORIZON, DIM = dp_np.shape
-            print(f'Found {N} proposals for token {token}; selecting 5 exemplars')
+            print(f'Found {N} proposals for token {token}; selecting {cfg.k} exemplars')
 
             k = int(cfg.k)
-            sel_method = cfg.selection_method.lower()
-            # use select_centorids helper (handles filtering, dedup, and selection)
-            centers = select_centorids(dp_np, k=k, sel_method=sel_method, rng_seed=0)
+            
+            # Use GTRS-Dense scoring for proposal selection
+            features = features_by_token.get(token)
+            if features is None:
+                print(f'  Warning: No features found for token {token}; cannot use GTRS-Dense scoring')
+                print(f'  Skipping {token}')
+                continue
+            
+            centers, gtrs_scores = score_and_select_trajectories_gtrs_dense(
+                dp_np=dp_np,
+                token=token,
+                gtrs_agent=agent,
+                features=features,
+                k=k,
+            )
             k = centers.shape[0] if (centers is not None and centers.shape[0] > 0) else 0
 
             scene = scene_loader.get_scene_from_token(token)
