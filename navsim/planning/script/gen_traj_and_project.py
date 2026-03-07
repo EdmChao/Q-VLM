@@ -256,19 +256,55 @@ def collect_features_by_token(dataloader):
     features_by_token = {}
     with torch.no_grad():
         for batch in dataloader:
-            tokens = batch.get('token', [])
-            camera_feat = batch.get('camera_feature', None)
-            status_feat = batch.get('status_feature', None)
-            
-            if camera_feat is not None and status_feat is not None:
-                batch_size = camera_feat.shape[0] if hasattr(camera_feat, 'shape') else len(tokens)
-                for i in range(batch_size):
-                    if i < len(tokens):
-                        token = tokens[i]
+            # Support two batch formats: dict (batched tensors) or list of dicts (per-sample)
+            items = None
+            if isinstance(batch, dict):
+                items = [batch]
+            elif isinstance(batch, (list, tuple)):
+                items = list(batch)
+            else:
+                # unexpected batch type
+                continue
+
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                tokens = item.get('token', None)
+                camera_feat = item.get('camera_feature', None)
+                status_feat = item.get('status_feature', None)
+
+                if camera_feat is None or status_feat is None:
+                    continue
+
+                # tokens may be a list (batched) or a single token string
+                if isinstance(tokens, (list, tuple)):
+                    # camera/status are expected to be batched tensors/arrays
+                    batch_size = camera_feat.shape[0] if hasattr(camera_feat, 'shape') else len(tokens)
+                    for i in range(batch_size):
+                        if i < len(tokens):
+                            token = tokens[i]
+                            features_by_token[token] = {
+                                'camera_feature': camera_feat[i:i+1] if hasattr(camera_feat, '__getitem__') else camera_feat,
+                                'status_feature': status_feat[i:i+1] if hasattr(status_feat, '__getitem__') else status_feat,
+                            }
+                else:
+                    # single token per item
+                    token = tokens
+                    # If tensors are batched, take the first element
+                    if hasattr(camera_feat, 'shape') and getattr(camera_feat, 'shape')[0] > 1:
+                        cam = camera_feat[0:1]
+                    else:
+                        cam = camera_feat
+                    if hasattr(status_feat, 'shape') and getattr(status_feat, 'shape')[0] > 1:
+                        st = status_feat[0:1]
+                    else:
+                        st = status_feat
+                    if token is not None:
                         features_by_token[token] = {
-                            'camera_feature': camera_feat[i:i+1] if hasattr(camera_feat, '__getitem__') else camera_feat,
-                            'status_feature': status_feat[i:i+1] if hasattr(status_feat, '__getitem__') else status_feat,
+                            'camera_feature': cam,
+                            'status_feature': st,
                         }
+
     return features_by_token
 
 
