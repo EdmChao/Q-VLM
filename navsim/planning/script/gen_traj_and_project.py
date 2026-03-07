@@ -276,9 +276,20 @@ def collect_features_by_token(dataloader):
 @hydra.main(config_path=CONFIG_PATH, config_name=CONFIG_NAME, version_base=None)
 def main(cfg: DictConfig) -> None:
     try:
-        # instantiate agent and scene loader similar to the test runner
+        # instantiate main agent (diffusion/DP) and separate GTRS scorer agent
         agent = instantiate(cfg.agent)
         agent.initialize()
+
+        scorer_agent = None
+        if cfg.get('scorer_agent'):
+            try:
+                scorer_agent = instantiate(cfg.scorer_agent)
+                # not all agents require initialize, but call if present
+                if hasattr(scorer_agent, 'initialize'):
+                    scorer_agent.initialize()
+            except Exception:
+                print('Warning: failed to instantiate or initialize scorer_agent')
+                traceback.print_exc()
 
         scene_filter_override = SceneFilter(
             num_history_frames=2,
@@ -468,10 +479,14 @@ def main(cfg: DictConfig) -> None:
                 print(f'  Skipping {token}')
                 continue
             
+            if scorer_agent is None:
+                print('No scorer_agent configured; cannot run GTRS-Dense scoring')
+                continue
+
             centers, gtrs_scores = score_and_select_trajectories_gtrs_dense(
                 dp_np=dp_np,
                 token=token,
-                gtrs_agent=agent,
+                gtrs_agent=scorer_agent,
                 features=features,
                 k=k,
             )

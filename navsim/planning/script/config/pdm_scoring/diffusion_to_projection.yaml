@@ -40,14 +40,13 @@ simulator:
   _convert_: "all"
   proposal_sampling: ${proposal_sampling}
 
-#override num proposals:
-agent:
+# GTRS scorer agent (separate from the diffusion/DP agent)
+scorer_agent:
   _target_: navsim.agents.gtrs_dense.gtrs_agent.GTRSAgent
   config:
     _target_: navsim.agents.gtrs_dense.hydra_config.HydraConfig
     checkpoint_path: ${oc.env:NAVSIM_EXP_ROOT}/gtrs_dp.ckpt
     vocab_path: ${oc.env:REPO_ROOT}/traj_final/16384.npy
-    # num_proposals: 150
 #Experimental training params
 # trainer:
 #   params:
