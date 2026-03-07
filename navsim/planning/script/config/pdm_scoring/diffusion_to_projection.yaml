@@ -45,8 +45,8 @@ scorer_agent:
   _target_: navsim.agents.gtrs_dense.gtrs_agent.GTRSAgent
   config:
     _target_: navsim.agents.gtrs_dense.hydra_config.HydraConfig
+    vocab_path: ${oc.env:REPO_ROOT}/traj_final/16384.npy
   checkpoint_path: ${oc.env:NAVSIM_EXP_ROOT}/gtrs_dp.ckpt
-  vocab_path: ${oc.env:REPO_ROOT}/traj_final/16384.npy
 #Experimental training params
 # trainer:
 #   params:
