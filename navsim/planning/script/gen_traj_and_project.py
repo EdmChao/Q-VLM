@@ -530,6 +530,7 @@ def main(cfg: DictConfig) -> None:
                     )
                 except Exception:
                     # fallback to using the original scene_loader if scorer agent doesn't provide get_sensor_config
+                    print("unable to load scorer_scene_loader, defaulting to scene_loader")
                     scorer_scene_loader = scene_loader
 
                 gtrs_dataset = Dataset(
