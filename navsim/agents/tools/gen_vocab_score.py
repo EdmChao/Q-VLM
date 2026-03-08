@@ -24,7 +24,7 @@ from navsim.planning.simulation.planner.pdm_planner.simulation.pdm_simulator imp
 )
 from navsim.traffic_agents_policies.abstract_traffic_agents_policy import AbstractTrafficAgentsPolicy
 
-vocab_size = 16384
+vocab_size = 8192
 logger = logging.getLogger(__name__)
 trajpdm_root = os.getenv('NAVSIM_TRAJPDM_ROOT')
 devkit_root = os.getenv('NAVSIM_DEVKIT_ROOT')

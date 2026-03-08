@@ -4,7 +4,7 @@ from sklearn.cluster import KMeans
 
 
 def main():
-    vocab_size = 16384
+    vocab_size = 8192
     ori_traj = np.load('your_path_to_npy')
     L, HORIZON, DIM = ori_traj.shape
     all_traj = ori_traj.reshape(L, -1)
