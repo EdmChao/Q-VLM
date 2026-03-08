@@ -194,7 +194,35 @@ def score_and_select_trajectories_gtrs_dense(
     
     # Reshape proposals to (1, N, H*D) - add batch dimension and flatten trajectory dims
     N, H, D = dp_torch.shape
-    dp_torch = dp_torch.reshape(1, N, H * D)  # (1, N, H*D)
+    # Before flattening, ensure proposals match model vocab horizon if possible
+    try:
+        vocab = gtrs_agent.model._trajectory_head.vocab.data
+        _, V_H, V_D = vocab.shape
+        expected_flat = V_H * V_D
+        if (H != V_H) or (D != V_D):
+            print(f"  Warning: proposal horizon/dim ({H},{D}) != model vocab ({V_H},{V_D}), interpolating proposals to match model.")
+            # Interpolate each proposal to target horizon V_H
+            dp_np_interp = np.zeros((N, V_H, V_D), dtype=dp_np.dtype)
+            old_x = np.arange(H)
+            new_x = np.linspace(0, H - 1, V_H)
+            for i in range(N):
+                for dim_i in range(D):
+                    dp_np_interp[i, :, dim_i] = np.interp(new_x, old_x, dp_np[i, :, dim_i])
+            # If D < V_D, pad zeros for missing dims; if D > V_D, truncate
+            if D < V_D:
+                if V_D > D:
+                    pad = np.zeros((N, V_H, V_D - D), dtype=dp_np.dtype)
+                    dp_np_interp = np.concatenate([dp_np_interp, pad], axis=2)
+            elif D > V_D:
+                dp_np_interp = dp_np_interp[:, :, :V_D]
+            dp_np = dp_np_interp
+            N, H, D = dp_np.shape
+            dp_torch = torch.from_numpy(dp_np).float()
+            dp_torch = dp_torch.reshape(1, N, H * D)
+        else:
+            dp_torch = dp_torch.reshape(1, N, H * D)  # (1, N, H*D)
+    except Exception:
+        dp_torch = dp_torch.reshape(1, N, H * D)  # (1, N, H*D)
 
     # Call GTRS-Dense scorer
     print(f"  Scoring {N} proposals with GTRS-Dense model")
