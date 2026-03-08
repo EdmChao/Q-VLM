@@ -18,6 +18,7 @@ defaults:
   - ddp
   - scorer: pdm_scorer
   - agent: gtrs_diffusion_policy
+  - scorer_agent: gtrs_dense_vov
   - _self_
   # - override train_test_split: navtest
   - override train_test_split: navhard_two_stage
@@ -40,16 +41,9 @@ simulator:
   _convert_: "all"
   proposal_sampling: ${proposal_sampling}
 
-# GTRS scorer agent (separate from the diffusion/DP agent)
-scorer_agent:
-  _target_: navsim.agents.gtrs_dense.gtrs_agent.GTRSAgent
-  config:
-    _target_: navsim.agents.gtrs_dense.hydra_config.HydraConfig
-    vocab_path: ${oc.env:REPO_ROOT}/traj_final/16384.npy
-    backbone_type: vov
-    vov_ckpt: ${oc.env:OPENSCENE_DATA_ROOT}/models/dd3d_det_final.pth
-  lr: 1e-4
-  checkpoint_path: ${oc.env:NAVSIM_EXP_ROOT}/gtrs_dp.ckpt
+## GTRS scorer agent is loaded from the common agent config group via defaults:
+## - scorer_agent: gtrs_dense_vov
+## If you need to override fields, use Hydra CLI overrides or add them under `scorer_agent`.
 #Experimental training params
 # trainer:
 #   params:
