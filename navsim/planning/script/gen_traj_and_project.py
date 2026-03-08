@@ -369,7 +369,6 @@ def main(cfg: DictConfig) -> None:
             sensor_config=agent.get_sensor_config(),
         )
 
-        # Build dataset but restrict to a single sample (first token)
         dataset = Dataset(
             scene_loader=scene_loader,
             feature_builders=agent.get_feature_builders(),
@@ -558,9 +557,34 @@ def main(cfg: DictConfig) -> None:
                         print("Failed to index gtrs_dataset[0]")
 
                 gtrs_dataloader = DataLoader(gtrs_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=pin_memory)
+                print("GTRS dataloader created:", {
+                    'batch_size': batch_size,
+                    'num_workers': num_workers,
+                    'pin_memory': pin_memory,
+                    'dataset_len': len(gtrs_dataset)
+                })
+                # Peek a single batch to inspect structure without disrupting iteration
+                try:
+                    batch_peek = next(iter(gtrs_dataloader))
+                    print("Peek GTRS batch type:", type(batch_peek))
+                    if isinstance(batch_peek, dict):
+                        for k, v in batch_peek.items():
+                            print(f"  peek {k} -> {type(v)}, shape={getattr(v,'shape', None)}")
+                    elif isinstance(batch_peek, (list, tuple)):
+                        print("  peek batch is list/tuple length", len(batch_peek))
+                        first = batch_peek[0] if len(batch_peek) > 0 else None
+                        if isinstance(first, dict):
+                            for k, v in first.items():
+                                print(f"    peek item[0].{k} -> {type(v)}, shape={getattr(v,'shape', None)}")
+                except Exception as e:
+                    print("  Failed to peek gtrs_dataloader batch:", e)
+
                 print("Collecting features from GTRS dataloader...")
                 features_by_token = collect_features_by_token(gtrs_dataloader)
                 print(f"  Collected features for {len(features_by_token)} tokens")
+                if len(features_by_token) > 0:
+                    sample_keys = list(features_by_token.keys())[:5]
+                    print(f"  Sample tokens with features: {sample_keys}")
             except Exception:
                 print('Warning: failed to build GTRS dataset/dataloader or collect features')
                 traceback.print_exc()
@@ -578,6 +602,17 @@ def main(cfg: DictConfig) -> None:
             tokens_to_process = list(merged.keys())
         else:
             tokens_to_process = [list(merged.keys())[0]]
+
+        # Filter tokens to those for which we collected GTRS features
+        if features_by_token:
+            prior_count = len(tokens_to_process)
+            available = set(features_by_token.keys())
+            tokens_to_process = [t for t in tokens_to_process if t in available]
+            removed = prior_count - len(tokens_to_process)
+            print(f"Filtered tokens_to_process by available GTRS features: kept {len(tokens_to_process)} / {prior_count} (removed {removed})")
+            if removed > 0:
+                missing = [t for t in tokens_to_process if t not in available]
+                print(f"  Note: some requested tokens had no features; sample missing tokens omitted from processing")
 
         for token in tokens_to_process:
             result = merged[token]
