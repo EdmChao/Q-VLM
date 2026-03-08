@@ -207,7 +207,9 @@ def score_and_select_trajectories_gtrs_dense(
                 for k_feat, v in features.items()
             }
             dp_torch = dp_torch.to(device)
-
+            print(f"  features['camera_feature'] shape: {getattr(features['camera_feature'], 'shape', 'N/A')}")
+            print(f"  features['status_feature'] shape: {getattr(features['status_feature'], 'shape', 'N/A')}")
+            print(f"  dp_torch shape: {dp_torch.shape}")
             # Call the GTRS scorer's evaluate_dp_proposals method
             result = gtrs_agent.evaluate_dp_proposals(
                 features=features_device,
@@ -298,6 +300,7 @@ def collect_features_by_token(dataloader):
                 batch_size = len(tokens)
                 for i in range(batch_size):
                     token = tokens[i]
+
                     # Handle camera_feature as list of images or batched tensor
                     if isinstance(camera_feat, list):
                         cam = camera_feat[i:i+1] if i < len(camera_feat) else None
@@ -598,6 +601,7 @@ def main(cfg: DictConfig) -> None:
             
             # Use GTRS-Dense scoring for proposal selection
             features = features_by_token.get(token)
+
             if features is None:
                 print(f'  Warning: No features found for token {token}; cannot use GTRS-Dense scoring')
                 print(f'  Skipping {token}')
