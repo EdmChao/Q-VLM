@@ -291,7 +291,21 @@ class HydraTrajHead(nn.Module):
         B = bev_feature.shape[0]
 
         NUM_PROPOSALS = dp_proposals.shape[1]
+        # DEBUG START: Temporary debug prints to trace shape mismatch issues.
+        # These prints are intentionally small and may be removed once debugging is complete.
+        try:
+            print(f"DEBUG_HYDRA: eval_dp_proposals called. B={B}, NUM_PROPOSALS={NUM_PROPOSALS}, dp_proposals.type={type(dp_proposals)}, dp_proposals.shape={getattr(dp_proposals, 'shape', None)}")
+            print(f"DEBUG_HYDRA: dp_proposals.numel()={dp_proposals.numel() if hasattr(dp_proposals, 'numel') else 'N/A'}")
+            print(f"DEBUG_HYDRA: bev_feature.shape={getattr(bev_feature, 'shape', None)}, status_encoding.shape={getattr(status_encoding, 'shape', None)}")
+        except Exception:
+            print("DEBUG_HYDRA: failed to print debug shapes")
         dp_proposals = dp_proposals.view(B, NUM_PROPOSALS, -1)
+        # DEBUG: print resulting shape after view
+        try:
+            print(f"DEBUG_HYDRA: dp_proposals reshaped to {getattr(dp_proposals, 'shape', None)}")
+        except Exception:
+            pass
+        # DEBUG END
         vocab = torch.cat([
             vocab.view(L, -1)[None].repeat(B, 1, 1),
             dp_proposals

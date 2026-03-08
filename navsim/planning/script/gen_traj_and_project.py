@@ -396,8 +396,14 @@ def main(cfg: DictConfig) -> None:
         num_workers = int(dl_cfg.get('num_workers', 0)) if dl_cfg is not None else 0
         pin_memory = bool(dl_cfg.get('pin_memory', False)) if dl_cfg is not None else False
 
-        gen_count = str(cfg.get('generate_count', 'one')).lower()
-        if gen_count == 'one':
+        gen_count = str(cfg.get('generate_count', 'one'))
+        gen_count_lower = gen_count.lower()
+        if gen_count.isdigit():
+            num = int(gen_count)
+            num = max(1, num)
+            print(f"Extracting first {num} elements from dataset for testing!")
+            subset = Subset(dataset, list(range(min(num, len(dataset)))))
+        elif gen_count_lower == 'one':
             print("Extracting first element from dataset for testing!")
             subset = Subset(dataset, [0])
             print(f"Using DataLoader batch_size={batch_size}, num_workers={num_workers}, pin_memory={pin_memory}")
@@ -560,8 +566,13 @@ def main(cfg: DictConfig) -> None:
         else:
             print('No scorer_agent configured; skipping GTRS feature collection')
 
-        gen_count = str(cfg.get('generate_count', 'one')).lower()
-        if gen_count == 'all':
+        gen_count = str(cfg.get('generate_count', 'one'))
+        # allow numeric strings to request N examples
+        if gen_count.isdigit():
+            n = int(gen_count)
+            all_tokens = list(merged.keys())
+            tokens_to_process = all_tokens[:n]
+        elif gen_count.lower() == 'all':
             tokens_to_process = list(merged.keys())
         else:
             tokens_to_process = [list(merged.keys())[0]]
@@ -601,6 +612,22 @@ def main(cfg: DictConfig) -> None:
             
             # Use GTRS-Dense scoring for proposal selection
             features = features_by_token.get(token)
+
+            # DEBUG: print out feature container types and shapes for this token
+            try:
+                print(f"  Debug: features for token {token} -> type={type(features)}")
+                if isinstance(features, dict):
+                    for fk, fv in features.items():
+                        try:
+                            shape = getattr(fv, 'shape', None)
+                            device = getattr(fv, 'device', None)
+                            print(f"    {fk}: type={type(fv)}, shape={shape}, device={device}")
+                        except Exception:
+                            print(f"    {fk}: type={type(fv)} (failed to get shape)")
+                else:
+                    print("    features is not a dict; repr:", repr(features))
+            except Exception:
+                print("    Failed to print debug info for features")
 
             if features is None:
                 print(f'  Warning: No features found for token {token}; cannot use GTRS-Dense scoring')
