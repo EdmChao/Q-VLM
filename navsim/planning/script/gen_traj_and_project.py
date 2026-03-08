@@ -250,60 +250,80 @@ def collect_features_by_token(dataloader):
     """
     Iterate through dataloader and build a mapping of token -> features.
     
+    The DataLoader may return batches as:
+    - dict: features_dict directly
+    - tuple: (features_dict, targets_dict, tokens) when append_token_to_batch=True
+    
     Returns:
-        dict mapping token -> {'camera_feature': tensor, 'status_feature': tensor}
+        dict mapping token -> {'camera_feature': list/tensor, 'status_feature': list/tensor}
     """
     features_by_token = {}
     with torch.no_grad():
         for batch in dataloader:
-            # Support two batch formats: dict (batched tensors) or list of dicts (per-sample)
-            items = None
+            features_dict = None
+            tokens = None
+            
+            # Unpack batch depending on structure
             if isinstance(batch, dict):
-                items = [batch]
-            elif isinstance(batch, (list, tuple)):
-                items = list(batch)
+                # Direct features dict
+                features_dict = batch
+                tokens = batch.get('token', None)
+            elif isinstance(batch, (list, tuple)) and len(batch) >= 2:
+                # Tuple format: (features_dict, targets_dict, tokens, ...)
+                features_dict = batch[0]
+                if len(batch) >= 3:
+                    tokens = batch[2]
+                elif isinstance(batch[1], dict) and 'token' in batch[1]:
+                    tokens = batch[1]['token']
             else:
-                # unexpected batch type
                 continue
-
-            for item in items:
-                if not isinstance(item, dict):
-                    continue
-                tokens = item.get('token', None)
-                camera_feat = item.get('camera_feature', None)
-                status_feat = item.get('status_feature', None)
-
-                if camera_feat is None or status_feat is None:
-                    continue
-
-                # tokens may be a list (batched) or a single token string
-                if isinstance(tokens, (list, tuple)):
-                    # camera/status are expected to be batched tensors/arrays
-                    batch_size = camera_feat.shape[0] if hasattr(camera_feat, 'shape') else len(tokens)
-                    for i in range(batch_size):
-                        if i < len(tokens):
-                            token = tokens[i]
-                            features_by_token[token] = {
-                                'camera_feature': camera_feat[i:i+1] if hasattr(camera_feat, '__getitem__') else camera_feat,
-                                'status_feature': status_feat[i:i+1] if hasattr(status_feat, '__getitem__') else status_feat,
-                            }
-                else:
-                    # single token per item
-                    token = tokens
-                    # If tensors are batched, take the first element
-                    if hasattr(camera_feat, 'shape') and getattr(camera_feat, 'shape')[0] > 1:
-                        cam = camera_feat[0:1]
+            
+            if not isinstance(features_dict, dict):
+                continue
+                
+            camera_feat = features_dict.get('camera_feature', None)
+            status_feat = features_dict.get('status_feature', None)
+            
+            if camera_feat is None or status_feat is None:
+                continue
+            
+            # Extract tokens - could be list or string
+            if tokens is None:
+                continue
+            
+            if isinstance(tokens, (list, tuple)):
+                # Multiple tokens in batch
+                batch_size = len(tokens)
+                for i in range(batch_size):
+                    token = tokens[i]
+                    # Handle camera_feature as list of images or batched tensor
+                    if isinstance(camera_feat, list):
+                        cam = camera_feat[i:i+1] if i < len(camera_feat) else None
+                    elif hasattr(camera_feat, '__getitem__'):
+                        cam = camera_feat[i:i+1]
                     else:
                         cam = camera_feat
-                    if hasattr(status_feat, 'shape') and getattr(status_feat, 'shape')[0] > 1:
-                        st = status_feat[0:1]
+                    
+                    # Handle status_feature as list or batched tensor
+                    if isinstance(status_feat, list):
+                        st = status_feat[i:i+1] if i < len(status_feat) else None
+                    elif hasattr(status_feat, '__getitem__'):
+                        st = status_feat[i:i+1]
                     else:
                         st = status_feat
-                    if token is not None:
+                    
+                    if token is not None and cam is not None and st is not None:
                         features_by_token[token] = {
                             'camera_feature': cam,
                             'status_feature': st,
                         }
+            else:
+                # Single token in batch
+                token = tokens
+                features_by_token[token] = {
+                    'camera_feature': camera_feat,
+                    'status_feature': status_feat,
+                }
 
     return features_by_token
 
