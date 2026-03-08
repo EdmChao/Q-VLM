@@ -302,19 +302,70 @@ def collect_features_by_token(dataloader):
                     token = tokens[i]
 
                     # Handle camera_feature as list of images or batched tensor
-                    if isinstance(camera_feat, list):
-                        cam = camera_feat[i:i+1] if i < len(camera_feat) else None
-                    elif hasattr(camera_feat, '__getitem__'):
-                        cam = camera_feat[i:i+1]
-                    else:
+                    cam = None
+                    try:
+                        # camera_feat could be:
+                        # - list over history where each element is a list of per-sample tensors (history-major nested list)
+                        # - list over history where each element is a batched tensor with shape [B, C, H, W]
+                        # - list of per-history single-sample tensors (when DataLoader batch_size==1)
+                        if isinstance(camera_feat, list):
+                            # history-major
+                            hist_list = camera_feat
+                            per_hist_samples = []
+                            for hist in hist_list:
+                                if isinstance(hist, list):
+                                    per_hist_samples.append(hist[i] if i < len(hist) else None)
+                                elif hasattr(hist, 'shape') and len(hist.shape) >= 4:
+                                    # batched tensor [B,...]
+                                    per_hist_samples.append(hist[i:i+1])
+                                else:
+                                    per_hist_samples.append(hist)
+                            # prefer returning a list of tensors (each with batch dim 1)
+                            cam = []
+                            for item in per_hist_samples:
+                                if item is None:
+                                    cam.append(None)
+                                elif hasattr(item, 'shape') and len(item.shape) == 3:
+                                    cam.append(item.unsqueeze(0))
+                                else:
+                                    cam.append(item)
+                        elif hasattr(camera_feat, '__getitem__'):
+                            # fallback: try indexing by sample
+                            itm = camera_feat[i] if i < len(camera_feat) else camera_feat
+                            cam = itm
+                        else:
+                            cam = camera_feat
+                    except Exception:
                         cam = camera_feat
                     
                     # Handle status_feature as list or batched tensor
-                    if isinstance(status_feat, list):
-                        st = status_feat[i:i+1] if i < len(status_feat) else None
-                    elif hasattr(status_feat, '__getitem__'):
-                        st = status_feat[i:i+1]
-                    else:
+                    st = None
+                    try:
+                        if isinstance(status_feat, list):
+                            # status_feat usually is a list over ego-status entries; each entry may be a batched tensor or list
+                            per_status = []
+                            for s in status_feat:
+                                if isinstance(s, list):
+                                    per_status.append(s[i] if i < len(s) else None)
+                                elif hasattr(s, 'shape') and len(s.shape) >= 2 and s.shape[0] == batch_size:
+                                    per_status.append(s[i:i+1])
+                                else:
+                                    per_status.append(s)
+                            # ensure each per_status element has batch dim
+                            st = []
+                            for item in per_status:
+                                if item is None:
+                                    st.append(None)
+                                elif hasattr(item, 'shape') and len(item.shape) == 1:
+                                    st.append(item.unsqueeze(0))
+                                else:
+                                    st.append(item)
+                        elif hasattr(status_feat, '__getitem__'):
+                            itm = status_feat[i] if i < len(status_feat) else status_feat
+                            st = itm
+                        else:
+                            st = status_feat
+                    except Exception:
                         st = status_feat
                     
                     if token is not None and cam is not None and st is not None:
