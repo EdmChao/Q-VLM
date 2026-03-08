@@ -46,6 +46,8 @@ scorer_agent:
   config:
     _target_: navsim.agents.gtrs_dense.hydra_config.HydraConfig
     vocab_path: ${oc.env:REPO_ROOT}/traj_final/16384.npy
+    backbone_type: vov
+    vov_ckpt: ${oc.env:OPENSCENE_DATA_ROOT}/models/dd3d_det_final.pth
   lr: 1e-4
   checkpoint_path: ${oc.env:NAVSIM_EXP_ROOT}/gtrs_dp.ckpt
 #Experimental training params
