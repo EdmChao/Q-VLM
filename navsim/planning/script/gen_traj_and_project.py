@@ -397,13 +397,15 @@ def main(cfg: DictConfig) -> None:
         pin_memory = bool(dl_cfg.get('pin_memory', False)) if dl_cfg is not None else False
 
         gen_count = str(cfg.get('generate_count', 'one'))
-        gen_count_lower = gen_count.lower()
+        # gen_count_lower = gen_count.lower()
+
         if gen_count.isdigit():
             num = int(gen_count)
             num = max(1, num)
             print(f"Extracting first {num} elements from dataset for testing!")
             subset = Subset(dataset, list(range(min(num, len(dataset)))))
-        elif gen_count_lower == 'one':
+            dataloader = DataLoader(subset, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=pin_memory)
+        elif gen_count == 'one':
             print("Extracting first element from dataset for testing!")
             subset = Subset(dataset, [0])
             print(f"Using DataLoader batch_size={batch_size}, num_workers={num_workers}, pin_memory={pin_memory}")
