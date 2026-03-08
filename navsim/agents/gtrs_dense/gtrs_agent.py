@@ -203,7 +203,21 @@ class GTRSAgent(AbstractAgent):
 
     def initialize(self) -> None:
         """Inherited, see superclass."""
-        state_dict: Dict[str, Any] = torch.load(self._checkpoint_path, map_location=torch.device("cpu"))["state_dict"]
+        # torch.load in PyTorch >=2.6 may default to weights_only=True which
+        # prevents loading full pickled checkpoints. Try default load first
+        # and fall back to weights_only=False when needed (trusted source only).
+        try:
+            ck = torch.load(self._checkpoint_path, map_location=torch.device("cpu"))
+        except Exception as e:
+            print('torch.load failed with:', e)
+            print('Retrying torch.load with weights_only=False (may execute pickled code).')
+            ck = torch.load(self._checkpoint_path, map_location=torch.device("cpu"), weights_only=False)
+
+        if isinstance(ck, dict) and "state_dict" in ck:
+            state_dict: Dict[str, Any] = ck["state_dict"]
+        else:
+            state_dict: Dict[str, Any] = ck
+
         # Remove keys containing 'model._trajectory_head.vocab'
         keys_to_delete = [k for k in state_dict if "model._trajectory_head.vocab" in k]
         for k in keys_to_delete:

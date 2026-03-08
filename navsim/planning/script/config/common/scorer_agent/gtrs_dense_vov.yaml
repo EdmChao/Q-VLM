@@ -22,7 +22,8 @@ config:
   _convert_: "all"
   vocab_path: ${oc.env:NAVSIM_DEVKIT_ROOT}/traj_final/16384.npy
   ckpt_path: hydra_plus_16384_ckpt
-  vocab_size: 8192
+  vocab_size: 16384
+
   lidar_seq_len: 4
   sigma: 0.5
   trajectory_imi_weight: 1.0
