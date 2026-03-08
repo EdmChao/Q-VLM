@@ -208,7 +208,6 @@ def score_and_select_trajectories_gtrs_dense(
             result = gtrs_agent.evaluate_dp_proposals(
                 features=features_device,
                 dp_proposals=dp_torch,
-                topk=k,
                 dp_only_inference=True  # We only care about DP proposals, not vocabulary
             )
     except Exception as e:
