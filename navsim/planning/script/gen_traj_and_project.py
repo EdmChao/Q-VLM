@@ -191,6 +191,10 @@ def score_and_select_trajectories_gtrs_dense(
 
     # Convert numpy proposals to torch tensor (keep in ego-frame format)
     dp_torch = torch.from_numpy(dp_np).float()  # (N, H, D)
+    
+    # Reshape proposals to (1, N, H*D) - add batch dimension and flatten trajectory dims
+    N, H, D = dp_torch.shape
+    dp_torch = dp_torch.reshape(1, N, H * D)  # (1, N, H*D)
 
     # Call GTRS-Dense scorer
     print(f"  Scoring {N} proposals with GTRS-Dense model")
