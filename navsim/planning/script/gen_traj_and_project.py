@@ -484,8 +484,24 @@ def main(cfg: DictConfig) -> None:
         if scorer_agent is not None:
             print("Building GTRS feature dataset and dataloader...")
             try:
+                # Build a SceneLoader for the scorer agent using its expected sensor config.
+                # The main scene_loader above was created with the proposal agent's sensor config,
+                # which can differ from the scorer agent and lead to missing camera images.
+                try:
+                    scorer_scene_loader = SceneLoader(
+                        synthetic_sensor_path=Path(cfg.synthetic_sensor_path),
+                        original_sensor_path=Path(cfg.original_sensor_path),
+                        data_path=Path(cfg.navsim_log_path),
+                        synthetic_scenes_path=Path(cfg.synthetic_scenes_path),
+                        scene_filter=scene_filter_override,
+                        sensor_config=scorer_agent.get_sensor_config(),
+                    )
+                except Exception:
+                    # fallback to using the original scene_loader if scorer agent doesn't provide get_sensor_config
+                    scorer_scene_loader = scene_loader
+
                 gtrs_dataset = Dataset(
-                    scene_loader=scene_loader,
+                    scene_loader=scorer_scene_loader,
                     feature_builders=scorer_agent.get_feature_builders(),
                     target_builders=scorer_agent.get_target_builders(),
                     cache_path=None,
@@ -493,6 +509,20 @@ def main(cfg: DictConfig) -> None:
                     append_token_to_batch=True,
                     is_training=False,
                 )
+
+                print("GTRS dataset length:", len(gtrs_dataset))
+                if len(gtrs_dataset) > 0:
+                    # inspect first item to verify features are produced
+                    try:
+                        sample = gtrs_dataset[0]
+                        if isinstance(sample, dict):
+                            print("gtrs_dataset[0] keys:", list(sample.keys()))
+                            for k, v in sample.items():
+                                print(f"  {k}: type={type(v)}, shape={getattr(v,'shape', None)}")
+                        else:
+                            print("gtrs_dataset[0] returned non-dict type:", type(sample))
+                    except Exception:
+                        print("Failed to index gtrs_dataset[0]")
 
                 gtrs_dataloader = DataLoader(gtrs_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=pin_memory)
                 print("Collecting features from GTRS dataloader...")
