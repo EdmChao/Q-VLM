@@ -47,5 +47,5 @@ config:
     time_horizon: 4
     interval_length: 0.1
 
-checkpoint_path: null
+checkpoint_path: ${oc.env:GTRS_CKPT_PATH}
 lr: 1e-4

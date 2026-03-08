@@ -15,13 +15,13 @@
 
 _target_: navsim.agents.gtrs_dense.gtrs_agent.GTRSAgent
 _convert_: "all"
-pdm_gt_path: ${oc.env:OPENSCENE_DATA_ROOT}/traj_pdm_v2/ori/navtrain_8192.pkl
+pdm_gt_path: ${oc.env:OPENSCENE_DATA_ROOT}/traj_pdm_v2/ori/navtrain_16384.pkl
 
 config:
   _target_: navsim.agents.gtrs_dense.hydra_config.HydraConfig
   _convert_: "all"
-  vocab_path: ${oc.env:NAVSIM_DEVKIT_ROOT}/traj_final/8192.npy
-  ckpt_path: hydra_plus_8192_ckpt
+  vocab_path: ${oc.env:NAVSIM_DEVKIT_ROOT}/traj_final/16384.npy
+  ckpt_path: hydra_plus_16384_ckpt
   vocab_size: 8192
   lidar_seq_len: 4
   sigma: 0.5
@@ -46,6 +46,5 @@ config:
     _convert_: "all"
     time_horizon: 4
     interval_length: 0.1
-
-checkpoint_path: null
+checkpoint_path: ${oc.env:GTRS_CKPT_PATH}
 lr: 1e-4
