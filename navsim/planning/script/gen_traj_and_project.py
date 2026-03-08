@@ -207,8 +207,7 @@ def score_and_select_trajectories_gtrs_dense(
             # Call the GTRS scorer's evaluate_dp_proposals method
             result = gtrs_agent.evaluate_dp_proposals(
                 features=features_device,
-                dp_proposals=dp_torch,
-                dp_only_inference=True  # We only care about DP proposals, not vocabulary
+                dp_proposals=dp_torch
             )
     except Exception as e:
         print(f"  Error during GTRS scoring: {e}")
