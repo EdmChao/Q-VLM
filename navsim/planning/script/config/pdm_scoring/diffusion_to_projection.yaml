@@ -17,9 +17,8 @@ defaults:
   - default_evaluation
   - ddp
   # - scorer: pdm_scorer
-  - agent: gtrs_dense_vov
   - agent: gtrs_diffusion_policy
-  # - scorer_agent: gtrs_dense_vov
+  - scorer_agent: gtrs_dense_vov
   - _self_
   # - override train_test_split: navtest
   - override train_test_split: navhard_two_stage
