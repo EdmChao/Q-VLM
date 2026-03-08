@@ -520,6 +520,14 @@ def main(cfg: DictConfig) -> None:
                 # The main scene_loader above was created with the proposal agent's sensor config,
                 # which can differ from the scorer agent and lead to missing camera images.
                 try:
+                    sc_cfg = scorer_agent.get_sensor_config()
+                    print(f"Scorer agent sensor_config: {sc_cfg}")
+                    print("Scorer SceneLoader paths:", {
+                        'synthetic_sensor_path': cfg.synthetic_sensor_path,
+                        'original_sensor_path': cfg.original_sensor_path,
+                        'navsim_log_path': cfg.navsim_log_path,
+                        'synthetic_scenes_path': cfg.synthetic_scenes_path,
+                    })
                     scorer_scene_loader = SceneLoader(
                         synthetic_sensor_path=Path(cfg.synthetic_sensor_path),
                         original_sensor_path=Path(cfg.original_sensor_path),
@@ -528,9 +536,10 @@ def main(cfg: DictConfig) -> None:
                         scene_filter=scene_filter_override,
                         sensor_config=scorer_agent.get_sensor_config(),
                     )
-                except Exception:
+                    print("Scorer SceneLoader created successfully using scorer_agent.get_sensor_config()")
+                except Exception as e:
                     # fallback to using the original scene_loader if scorer agent doesn't provide get_sensor_config
-                    print("unable to load scorer_scene_loader, defaulting to scene_loader")
+                    print("unable to load scorer_scene_loader, defaulting to scene_loader", e)
                     scorer_scene_loader = scene_loader
 
                 gtrs_dataset = Dataset(
