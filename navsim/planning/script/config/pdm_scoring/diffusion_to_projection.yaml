@@ -41,24 +41,12 @@ simulator:
   _convert_: "all"
   proposal_sampling: ${proposal_sampling}
 
-## GTRS scorer agent is loaded from the common agent config group via defaults:
-## - scorer_agent: gtrs_dense_vov
-## If you need to override fields, use Hydra CLI overrides or add them under `scorer_agent`.
-#Experimental training params
-# trainer:
-#   params:
-#     accelerator: gpu
-#     devices: 4
-#     strategy: dp
-#gneration related stuff
 #all to generate proposals for all data, one to generate for one example, int to generate int examples
-generate_count: 8
+generate_count: 256
 
 #projection related stuff
 #determine how many exemplar trajectories to sample
 k: 10
-#random for random selection, kmeans for k-means, and ff for farthest-first
-selection_method: ff
 
 #use gtrs scoring or not
 use_gtrs_dense_scoring: True

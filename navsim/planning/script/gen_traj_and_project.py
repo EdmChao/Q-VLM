@@ -121,7 +121,7 @@ def make_stitched_and_projector(scene, fb):
     return out_img, project_to_stitched
 
 
-def draw_trajectories_and_save(out_img, project_fn, centers, token, cfg, k):
+def draw_trajectories_and_save(out_img, project_fn, centers, token, k):
     """
     Draw multiple trajectories onto a stitched image and save overlay files.
 
@@ -136,7 +136,6 @@ def draw_trajectories_and_save(out_img, project_fn, centers, token, cfg, k):
         project_fn: callable mapping (x,y) -> (px,py)
         centers: numpy array shaped (K, H, D) with trajectories in ego-frame
         token: scene token used for naming output files
-        cfg: configuration object (used to derive selection_method)
         k: number of trajectories (K) present in `centers`
     """
     # Map color names to BGR tuples for OpenCV
@@ -177,17 +176,16 @@ def draw_trajectories_and_save(out_img, project_fn, centers, token, cfg, k):
         polyline_strings.append(f"{color_str}: {coord_str}")
 
     out_dir = os.getenv('NAVSIM_EXP_ROOT')
-    sel_method = cfg.selection_method.lower()
     if out_dir is None:
-        overlay_dir = Path.cwd() / f"{k}_proposals_{sel_method}"
+        overlay_dir = Path.cwd() / f"{k}_proposals"
     else:
-        overlay_dir = Path(out_dir) / f"{k}_proposals_{sel_method}"
+        overlay_dir = Path(out_dir) / f"{k}_proposals"
     overlay_dir.mkdir(parents=True, exist_ok=True)
-    out_img_path = overlay_dir / f"traj_overlay_{k}_{sel_method}_{token}.png"
+    out_img_path = overlay_dir / f"traj_overlay_{k}_{token}.png"
     cv2.imwrite(str(out_img_path), out_img)
     print(f'Wrote overlay image to {out_img_path}')
 
-    out_txt_path = overlay_dir / f"traj_overlay_{k}_{sel_method}_{token}.txt"
+    out_txt_path = overlay_dir / f"traj_overlay_{k}_{token}.txt"
     with open(out_txt_path, 'w') as ftxt:
         for line in polyline_strings:
             ftxt.write(line + "\n")
@@ -919,7 +917,7 @@ def main(cfg: DictConfig) -> None:
                 print(f'Missing camera images for token {token}; cannot create stitched overlay')
                 continue
 
-            draw_trajectories_and_save(out_img, project_fn, centers, token, cfg, k)
+            draw_trajectories_and_save(out_img, project_fn, centers, token, k)
 
         
 
