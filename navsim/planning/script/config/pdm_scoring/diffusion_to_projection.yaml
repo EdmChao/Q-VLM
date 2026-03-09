@@ -52,11 +52,11 @@ simulator:
 #     strategy: dp
 #gneration related stuff
 #all to generate proposals for all data, one to generate for one example, int to generate int examples
-generate_count: one
+generate_count: 8
 
 #projection related stuff
 #determine how many exemplar trajectories to sample
-k: 5
+k: 32
 #random for random selection, kmeans for k-means, and ff for farthest-first
 selection_method: ff
 

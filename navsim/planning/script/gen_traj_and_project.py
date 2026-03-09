@@ -230,14 +230,111 @@ def score_and_select_trajectories_gtrs_dense(
         with torch.no_grad():
             # Move features to same device as model
             device = next(gtrs_agent.parameters()).device
-            features_device = {
-                k_feat: v.to(device) if isinstance(v, torch.Tensor) else v
-                for k_feat, v in features.items()
-            }
+
+            # Helper to normalize/move features to target device while preserving
+            # the expected list/tensor structure used by HydraModel.
+            def _move_and_normalize(feat_dict, device):
+                out = {}
+                for kf, fv in feat_dict.items():
+                    # Camera features: may be list(history) or a single tensor/ndarray
+                    if kf.startswith('camera_feature'):
+                        if isinstance(fv, list):
+                            new_list = []
+                            for item in fv:
+                                if item is None:
+                                    new_list.append(None)
+                                    continue
+                                if isinstance(item, torch.Tensor):
+                                    t = item
+                                elif isinstance(item, np.ndarray):
+                                    t = torch.from_numpy(item)
+                                else:
+                                    try:
+                                        t = torch.tensor(item)
+                                    except Exception:
+                                        new_list.append(item)
+                                        continue
+                                if t.dim() == 3:
+                                    t = t.unsqueeze(0)
+                                new_list.append(t.to(device))
+                            out[kf] = new_list
+                        elif isinstance(fv, torch.Tensor):
+                            t = fv
+                            if t.dim() == 3:
+                                t = t.unsqueeze(0)
+                            out[kf] = t.to(device)
+                        elif isinstance(fv, np.ndarray):
+                            t = torch.from_numpy(fv)
+                            if t.dim() == 3:
+                                t = t.unsqueeze(0)
+                            out[kf] = t.to(device)
+                        else:
+                            out[kf] = fv
+
+                    # Status features: often a list where each element is a tensor/ndarray
+                    elif kf == 'status_feature' or kf.endswith('status_feature'):
+                        if isinstance(fv, list):
+                            new_list = []
+                            for item in fv:
+                                if item is None:
+                                    new_list.append(None)
+                                    continue
+                                if isinstance(item, torch.Tensor):
+                                    t = item
+                                elif isinstance(item, np.ndarray):
+                                    t = torch.from_numpy(item)
+                                else:
+                                    try:
+                                        t = torch.tensor(item)
+                                    except Exception:
+                                        new_list.append(item)
+                                        continue
+                                if t.dim() == 1:
+                                    t = t.unsqueeze(0)
+                                new_list.append(t.to(device))
+                            out[kf] = new_list
+                        elif isinstance(fv, torch.Tensor):
+                            t = fv
+                            if t.dim() == 1:
+                                t = t.unsqueeze(0)
+                            out[kf] = t.to(device)
+                        elif isinstance(fv, np.ndarray):
+                            t = torch.from_numpy(fv)
+                            if t.dim() == 1:
+                                t = t.unsqueeze(0)
+                            out[kf] = t.to(device)
+                        else:
+                            out[kf] = fv
+
+                    # Generic: move tensors/ndarrays, leave other types unchanged
+                    else:
+                        if isinstance(fv, torch.Tensor):
+                            out[kf] = fv.to(device)
+                        elif isinstance(fv, np.ndarray):
+                            out[kf] = torch.from_numpy(fv).to(device)
+                        else:
+                            out[kf] = fv
+                return out
+
+            features_device = _move_and_normalize(features, device)
             dp_torch = dp_torch.to(device)
-            print(f"  features['camera_feature'] shape: {getattr(features['camera_feature'], 'shape', 'N/A')}")
-            print(f"  features['status_feature'] shape: {getattr(features['status_feature'], 'shape', 'N/A')}")
+
+            def _shape_str(x):
+                try:
+                    if isinstance(x, list):
+                        for item in reversed(x):
+                            if item is None:
+                                continue
+                            return str(getattr(item, 'shape', None))
+                        return 'list(all None)'
+                    return str(getattr(x, 'shape', None))
+                except Exception:
+                    return 'N/A'
+
+            print(f"  features['camera_feature'] shape: {_shape_str(features_device.get('camera_feature'))}")
+            print(f"  features['status_feature'] shape: {_shape_str(features_device.get('status_feature'))}")
             print(f"  dp_torch shape: {dp_torch.shape}")
+
             # Call the GTRS scorer's evaluate_dp_proposals method
             result = gtrs_agent.evaluate_dp_proposals(
                 features=features_device,
