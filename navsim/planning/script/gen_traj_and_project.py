@@ -27,6 +27,25 @@ CONFIG_NAME = "diffusion_to_projection"
 
 
 def make_stitched_and_projector(scene, fb):
+    """
+    Build a stitched camera image for visualization and return a projector function.
+
+    This utility composes left/front/right camera crops into a single stitched image
+    resized to the feature builder's configured camera size. It also returns a
+    `project_to_stitched` function that maps ego-frame ground-plane (x,y)
+    coordinates to pixel coordinates in the stitched image. The projector handles
+    cropping offsets and scaling for the resized stitched image.
+
+    Args:
+        scene: a Scene object containing frames and camera data.
+        fb: the feature builder instance (used to read expected camera width/height).
+
+    Returns:
+        out_img: an OpenCV uint8 image (stitched + resized) or (None, None) if
+                 any required camera image is missing.
+        project_to_stitched: a callable mapping (x,y) -> (px,py) pixel coords
+                             or None if mapping fails for a given point.
+    """
     frame_idx = scene.scene_metadata.num_history_frames - 1
     frame = scene.frames[frame_idx]
 
@@ -103,6 +122,23 @@ def make_stitched_and_projector(scene, fb):
 
 
 def draw_trajectories_and_save(out_img, project_fn, centers, token, cfg, k):
+    """
+    Draw multiple trajectories onto a stitched image and save overlay files.
+
+    This helper draws up to `k` trajectories (RGB polylines) using the
+    provided projection function to map trajectory (x,y) coordinates into
+    stitched image pixels. It writes an overlay PNG and a text file describing
+    per-trajectory pixel coordinates. Useful as a standalone visualization
+    utility when inspecting selected proposals.
+
+    Args:
+        out_img: stitched OpenCV image to draw on (modified in-place)
+        project_fn: callable mapping (x,y) -> (px,py)
+        centers: numpy array shaped (K, H, D) with trajectories in ego-frame
+        token: scene token used for naming output files
+        cfg: configuration object (used to derive selection_method)
+        k: number of trajectories (K) present in `centers`
+    """
     # Map color names to BGR tuples for OpenCV
     color_map = [
         ("red", (0, 0, 255)),
@@ -385,6 +421,13 @@ def collect_features_by_token(dataloader):
     
     Returns:
         dict mapping token -> {'camera_feature': list/tensor, 'status_feature': list/tensor}
+
+    Notes:
+        - The returned `camera_feature` values preserve the original structure
+          emitted by the dataset (commonly a list over history frames where
+          each entry may be a batched tensor or per-sample tensor). This
+          function does not convert tensors to any device — callers should
+          perform device transfers as appropriate (see `score_and_select_trajectories_gtrs_dense`).
     """
     features_by_token = {}
     with torch.no_grad():

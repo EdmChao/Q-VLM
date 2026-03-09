@@ -56,7 +56,7 @@ generate_count: 8
 
 #projection related stuff
 #determine how many exemplar trajectories to sample
-k: 32
+k: 10
 #random for random selection, kmeans for k-means, and ff for farthest-first
 selection_method: ff
 
