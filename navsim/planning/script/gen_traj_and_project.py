@@ -265,6 +265,7 @@ def draw_bev_topk_and_save(centers, token, total_proposals: int, k: int, overlay
         cv2.circle(bev_img, ego_px, 5, (0, 0, 0), -1)
     bev_path = overlay_dir / f"bev_topk_{k}_{token}.png"
     cv2.imwrite(str(bev_path), bev_img)
+    print(f'Wrote BEV overlay image to {bev_path}')
 
 
 def score_and_select_trajectories_gtrs_dense(
