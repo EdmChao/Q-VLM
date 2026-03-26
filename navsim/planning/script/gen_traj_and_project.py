@@ -121,7 +121,7 @@ def make_stitched_and_projector(scene, fb):
     return out_img, project_to_stitched
 
 
-def draw_trajectories_and_save(out_img, project_fn, centers, token, k):
+def draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_proposals=None):
     """
     Draw multiple trajectories onto a stitched image and save overlay files.
 
@@ -187,12 +187,84 @@ def draw_trajectories_and_save(out_img, project_fn, centers, token, k):
 
     out_txt_path = overlay_dir / f"traj_overlay_{k}_{token}.txt"
     with open(out_txt_path, 'w') as ftxt:
+        # write header with counts when available
+        if total_proposals is not None:
+            ftxt.write(f"TOTAL_PROPOSALS: {total_proposals}\n")
+        ftxt.write(f"SELECTED: {k}\n")
+        ftxt.write("--PROJECTED_PIXEL_COORDS--\n")
         for line in polyline_strings:
             ftxt.write(line + "\n")
         # mark cases where no valid proposals remained
         if k == 0:
             ftxt.write("ALL_NAN: True\n")
+        # also output pre-transformed (ego-frame) coordinates for each selected traj
+        ftxt.write("--PRE_TRANSFORM_TRAJ_COORDS_EGO_XY--\n")
+        if centers is None or centers.size == 0:
+            ftxt.write("NO_SELECTED_TRAJECTORIES\n")
+        else:
+            for i in range(centers.shape[0]):
+                coords = ";".join([f"{float(x):.4f},{float(y):.4f}" for (x, y) in centers[i, :, :2]])
+                ftxt.write(f"traj_{i}: {coords}\n")
     print(f'Wrote trajectory strings to {out_txt_path}')
+
+#want to merge into draw_trajectories_and_save though, so we can save BEV images in the same dir as other images/txt files. Also, don't need a separate BEV traj.txt file if we already write it to the original txt file.
+def draw_bev_topk_and_save(centers, token, total_proposals: int, k: int, overlay_dir: Path = None):
+    """
+    Draw a simple top-down BEV image of the selected trajectories and save it alongside text info.
+    - centers: (k, H, D) numpy array in ego coords (meters)
+    - total_proposals: total number of proposals before selection
+    - k: number of selected proposals
+    """
+    # If caller provided an overlay_dir, use it so BEV image sits alongside other outputs.
+    if overlay_dir is None:
+        out_dir = os.getenv('NAVSIM_EXP_ROOT')
+        if out_dir is None:
+            overlay_dir = Path.cwd() / f"{k}_proposals_BEV"
+        else:
+            overlay_dir = Path(out_dir) / f"{k}_proposals_BEV"
+    overlay_dir.mkdir(parents=True, exist_ok=True)
+
+    bev_img_size = 512
+    bev_img = np.ones((bev_img_size, bev_img_size, 3), dtype=np.uint8) * 255
+
+    if centers is None or centers.size == 0:
+        bev_path = overlay_dir / f"bev_topk_{k}_{token}.png"
+        cv2.imwrite(str(bev_path), bev_img)
+        return
+
+    # collect x,y points
+    all_xy = []
+    for i in range(centers.shape[0]):
+        for t in range(centers.shape[1]):
+            xy = centers[i, t][:2]
+            all_xy.append(xy)
+    all_xy = np.array(all_xy)
+    min_x, min_y = np.min(all_xy[:, 0]), np.min(all_xy[:, 1])
+    max_x, max_y = np.max(all_xy[:, 0]), np.max(all_xy[:, 1])
+    pad = 1.0
+    min_x -= pad; min_y -= pad; max_x += pad; max_y += pad
+    span_x = max(max_x - min_x, 1e-3)
+    span_y = max(max_y - min_y, 1e-3)
+    scale = min((bev_img_size - 20) / span_x, (bev_img_size - 20) / span_y)
+    def to_pix(x, y):
+        px = int((x - min_x) * scale) + 10
+        py = int((max_y - y) * scale) + 10
+        return px, py
+    color_map = [(0, 0, 255), (0, 255, 0), (255, 0, 0), (0, 255, 255), (255, 0, 255), (255, 255, 0)]
+    for i in range(centers.shape[0]):
+        pts = []
+        for t in range(centers.shape[1]):
+            x, y = centers[i, t][:2]
+            pts.append(to_pix(x, y))
+        if len(pts) >= 2:
+            cv2.polylines(bev_img, [np.array(pts, dtype=np.int32)], False, color_map[i % len(color_map)], 2)
+        elif len(pts) == 1:
+            cv2.circle(bev_img, pts[0], 3, color_map[i % len(color_map)], -1)
+    if (min_x <= 0 <= max_x) and (min_y <= 0 <= max_y):
+        ego_px = to_pix(0.0, 0.0)
+        cv2.circle(bev_img, ego_px, 5, (0, 0, 0), -1)
+    bev_path = overlay_dir / f"bev_topk_{k}_{token}.png"
+    cv2.imwrite(str(bev_path), bev_img)
 
 
 def score_and_select_trajectories_gtrs_dense(
@@ -917,7 +989,18 @@ def main(cfg: DictConfig) -> None:
                 print(f'Missing camera images for token {token}; cannot create stitched overlay')
                 continue
 
-            draw_trajectories_and_save(out_img, project_fn, centers, token, k)
+            # save stitched image overlays and BEV visualization (BEV saved in same overlay dir)
+            draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_proposals=N)
+            try:
+                # pass same overlay_dir used by draw_trajectories_and_save so files co-locate
+                out_dir = os.getenv('NAVSIM_EXP_ROOT')
+                if out_dir is None:
+                    overlay_dir = Path.cwd() / f"{k}_proposals"
+                else:
+                    overlay_dir = Path(out_dir) / f"{k}_proposals"
+                draw_bev_topk_and_save(centers, token, total_proposals=N, k=k, overlay_dir=overlay_dir)
+            except Exception:
+                print('Warning: failed to draw BEV topk visualization')
 
         
 
