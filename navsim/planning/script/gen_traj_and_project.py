@@ -190,7 +190,9 @@ def draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_pro
             pts_arr = np.array(pts, dtype=np.int32)
             cv2.polylines(out_img, [pts_arr], isClosed=False, color=color_bgr, thickness=2)
         elif len(pts) == 1:
-            cv2.circle(out_img, tuple(pts[0]), 3, color_bgr, -1)
+            # pts may contain float coordinates (debug mode returns floats); cast to int for OpenCV
+            cx, cy = pts[0]
+            cv2.circle(out_img, (int(round(cx)), int(round(cy))), 3, color_bgr, -1)
 
         if len(pts) > 0:
             coord_str = ";".join([f"{int(x)},{int(y)}" for (x, y) in pts])
