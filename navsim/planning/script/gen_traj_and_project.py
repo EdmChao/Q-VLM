@@ -181,9 +181,31 @@ def draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_pro
     for i in range(k):
         color_str, color_bgr = color_map[i % len(color_map)]
         pts = []
+        # determine per-trajectory shift and forward vector
+        shift_i = 0.0
+        if per_traj_shifts is not None:
+            try:
+                shift_i = float(per_traj_shifts[i])
+            except Exception:
+                shift_i = 0.0
+        # compute forward vector from first motion vector when available
+        if centers is not None and centers.size != 0 and centers.shape[1] > 1:
+            v0 = centers[i, 1, :2] - centers[i, 0, :2]
+            norm = np.linalg.norm(v0)
+            if norm > 1e-6:
+                forward_vec = v0 / norm
+            else:
+                forward_vec = np.array([1.0, 0.0], dtype=np.float32)
+        else:
+            forward_vec = np.array([1.0, 0.0], dtype=np.float32)
         for t in range(HORIZON):
             xy = centers[i, t][:2]
-            p = project_fn(xy)
+            # apply visualization-only forward shift to a local copy of xy
+            if shift_i and shift_i != 0.0:
+                xy_shifted = xy + (forward_vec * shift_i)
+            else:
+                xy_shifted = xy
+            p = project_fn(xy_shifted)
             if p is not None:
                 pts.append(p)
         if len(pts) >= 2:
