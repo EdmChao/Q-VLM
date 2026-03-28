@@ -707,6 +707,11 @@ def collect_features_by_token(dataloader):
 @hydra.main(config_path=CONFIG_PATH, config_name=CONFIG_NAME, version_base=None)
 def main(cfg: DictConfig) -> None:
     try:
+        # Optionally set CUDA_VISIBLE_DEVICES from config
+        cuda_env = getattr(cfg, 'cuda_visible_devices', None)
+        if cuda_env is not None and str(cuda_env).lower() != 'null':
+            os.environ['CUDA_VISIBLE_DEVICES'] = str(cuda_env)
+            print(f"Set CUDA_VISIBLE_DEVICES to {cuda_env}")
         # instantiate main agent (diffusion/DP) and separate GTRS scorer agent
         agent = instantiate(cfg.agent)
         agent.initialize()
