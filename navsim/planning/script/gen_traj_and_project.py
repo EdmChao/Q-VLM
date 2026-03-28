@@ -191,9 +191,12 @@ def draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_pro
         # compute forward vector from first motion vector when available
         if centers is not None and centers.size != 0 and centers.shape[1] > 1:
             v0 = centers[i, 1, :2] - centers[i, 0, :2]
-            norm = np.linalg.norm(v0)
+            # Use absolute direction to ensure forward visualization shift
+            # moves points forward even when initial motion is negative/backward.
+            v0_abs = np.abs(v0)
+            norm = np.linalg.norm(v0_abs)
             if norm > 1e-6:
-                forward_vec = v0 / norm
+                forward_vec = v0_abs / norm
             else:
                 forward_vec = np.array([1.0, 0.0], dtype=np.float32)
         else:
