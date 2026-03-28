@@ -144,7 +144,7 @@ def make_stitched_and_projector(scene, fb):
     return out_img, project_to_stitched
 
 
-def draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_proposals=None):
+def draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_proposals=None, min_start_dist=None, per_traj_shifts=None):
     """
     Draw multiple trajectories onto a stitched image and save overlay files.
 
@@ -216,6 +216,13 @@ def draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_pro
         if total_proposals is not None:
             ftxt.write(f"TOTAL_PROPOSALS: {total_proposals}\n")
         ftxt.write(f"SELECTED: {k}\n")
+        # write computed start-distance diagnostics if provided
+        if min_start_dist is not None:
+            ftxt.write(f"MIN_START_DIST: {float(min_start_dist):.4f}\n")
+        if per_traj_shifts is not None:
+            ftxt.write("--APPLIED_SHIFTS--\n")
+            for si in per_traj_shifts:
+                ftxt.write(f"{float(si):.4f}\n")
         ftxt.write("--PROJECTED_PIXEL_COORDS--\n")
         for line in polyline_strings:
             ftxt.write(line + "\n")
@@ -230,6 +237,12 @@ def draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_pro
             for i in range(centers.shape[0]):
                 coords = ";".join([f"{float(x):.4f},{float(y):.4f}" for (x, y) in centers[i, :, :2]])
                 ftxt.write(f"traj_{i}: {coords}\n")
+        # Also write per-trajectory start distances if available (for diagnostics)
+        if centers is not None and centers.size != 0 and min_start_dist is not None:
+            ftxt.write("--START_DISTANCES--\n")
+            for i in range(centers.shape[0]):
+                start_dist_i = float(np.linalg.norm(centers[i, 0, :2]))
+                ftxt.write(f"traj_{i}: {start_dist_i:.4f}\n")
     print(f'Wrote trajectory strings to {out_txt_path}')
 
 #want to merge into draw_trajectories_and_save though, so we can save BEV images in the same dir as other images/txt files. Also, don't need a separate BEV traj.txt file if we already write it to the original txt file.
@@ -291,6 +304,48 @@ def draw_bev_topk_and_save(centers, token, total_proposals: int, k: int, overlay
     bev_path = overlay_dir / f"bev_topk_{k}_{token}.png"
     cv2.imwrite(str(bev_path), bev_img)
     print(f'Wrote BEV overlay image to {bev_path}')
+
+
+def compute_start_distances(centers: np.ndarray) -> np.ndarray:
+    """
+    Compute Euclidean distance from ego origin to each trajectory's start point.
+
+    Args:
+        centers: numpy array shaped (K, H, D) where [:,0,:2] are start x,y coords.
+
+    Returns:
+        start_distances: numpy array shape (K,) of L2 distances.
+    """
+    if centers is None or centers.size == 0:
+        return np.array([])
+    starts = centers[:, 0, :2]
+    dists = np.linalg.norm(starts, axis=1)
+    return dists
+
+
+def compute_shift_amounts(start_distances: np.ndarray, desired_min_dist: float = 8.0, shift_scale: float = 1.0, max_shift: float = None) -> np.ndarray:
+    """
+    Compute per-trajectory forward-shift amounts for visualization only.
+
+    shift = 0 if start_dist >= desired_min_dist else (desired_min_dist - start_dist) * shift_scale
+    Optionally clamp to max_shift.
+
+    Args:
+        start_distances: (K,) array of start distances
+        desired_min_dist: distance threshold (meters)
+        shift_scale: multiplier for computed shift
+        max_shift: optional float to clamp shifts
+
+    Returns:
+        shifts: (K,) numpy array of shift amounts (meters)
+    """
+    if start_distances is None or start_distances.size == 0:
+        return np.array([])
+    delta = np.maximum(0.0, desired_min_dist - start_distances)
+    shifts = delta * float(shift_scale)
+    if max_shift is not None:
+        shifts = np.minimum(shifts, float(max_shift))
+    return shifts
 
 
 def score_and_select_trajectories_gtrs_dense(
@@ -1015,8 +1070,29 @@ def main(cfg: DictConfig) -> None:
                 print(f'Missing camera images for token {token}; cannot create stitched overlay')
                 continue
 
+            # compute per-trajectory start distances and optional visualization shifts
+            try:
+                start_dists = compute_start_distances(centers)
+                min_start = float(np.min(start_dists)) if (start_dists.size > 0) else None
+                # resolve visualization params from cfg if available
+                try:
+                    vis_cfg = cfg.debug.visualization
+                    desired_min = float(getattr(vis_cfg, 'desired_min_dist', 8.0))
+                    shift_scale = float(getattr(vis_cfg, 'shift_scale', 1.0))
+                    max_shift = getattr(vis_cfg, 'max_shift', None)
+                    max_shift = None if max_shift is None else float(max_shift)
+                except Exception:
+                    desired_min = 8.0
+                    shift_scale = 1.0
+                    max_shift = None
+                per_traj_shifts = compute_shift_amounts(start_dists, desired_min_dist=desired_min, shift_scale=shift_scale, max_shift=max_shift)
+            except Exception:
+                start_dists = np.array([])
+                min_start = None
+                per_traj_shifts = None
+
             # save stitched image overlays and BEV visualization (BEV saved in same overlay dir)
-            draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_proposals=N)
+            draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_proposals=N, min_start_dist=min_start, per_traj_shifts=per_traj_shifts)
             try:
                 # pass same overlay_dir used by draw_trajectories_and_save so files co-locate
                 out_dir = os.getenv('NAVSIM_EXP_ROOT')
