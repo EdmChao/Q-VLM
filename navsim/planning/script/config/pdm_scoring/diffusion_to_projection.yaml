@@ -59,7 +59,7 @@ debug:
   visualization:
     # If a trajectory's start distance is less than this (meters), apply
     # a projection-time forward shift for visualization only.
-    desired_min_dist: 6.0
+    desired_min_dist: 5.5
     # multiplier applied to (desired_min_dist - start_dist) to compute shift
     shift_scale: 1.0
     # optional clamp on per-trajectory shift (meters). Set to null to disable.

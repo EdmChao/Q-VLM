@@ -95,45 +95,45 @@ def make_stitched_and_projector(scene, fb):
             (cam_r0, offsets[2], True),
         ]
 
-        # for cam, x_off, lr_crop in cams:
-        #     if cam.intrinsics is None or cam.sensor2lidar_rotation is None or cam.sensor2lidar_translation is None:
-        #         continue
-        #     intr = np.array(cam.intrinsics)
-        #     rot = np.array(cam.sensor2lidar_rotation)
-        #     trans = np.array(cam.sensor2lidar_translation)
-        #     img_h_full, img_w_full = cam.image.shape[:2]
-        #     pc_img, in_fov = _transform_pcs_to_images(lidar_pc, rot, trans, intr, img_shape=(img_h_full, img_w_full))
-        #     if in_fov[0]:
-        #         u_full, v_full = pc_img[0]
-        #         u_crop = u_full - (416 if lr_crop else 0)
-        #         v_crop = v_full - 28
-        #         stitched_x = u_crop + x_off
-        #         stitched_y = v_crop
-        #         px = int(np.round(stitched_x * scale_x))
-        #         py = int(np.round(stitched_y * scale_y))
-        #         return px, py
-                        # DEBUG: force front camera only for intrinsics/extrinsics to simplify debugging
-        cam = cam_f0
-        x_off = offsets[1]
-        lr_crop = False
+        for cam, x_off, lr_crop in cams:
+            if cam.intrinsics is None or cam.sensor2lidar_rotation is None or cam.sensor2lidar_translation is None:
+                continue
+            intr = np.array(cam.intrinsics)
+            rot = np.array(cam.sensor2lidar_rotation)
+            trans = np.array(cam.sensor2lidar_translation)
+            img_h_full, img_w_full = cam.image.shape[:2]
+            pc_img, in_fov = _transform_pcs_to_images(lidar_pc, rot, trans, intr, img_shape=(img_h_full, img_w_full))
+            if in_fov[0]:
+                u_full, v_full = pc_img[0]
+                u_crop = u_full - (416 if lr_crop else 0)
+                v_crop = v_full - 28
+                stitched_x = u_crop + x_off
+                stitched_y = v_crop
+                px = int(np.round(stitched_x * scale_x))
+                py = int(np.round(stitched_y * scale_y))
+                return px, py
+        # DEBUG: force front camera only for intrinsics/extrinsics to simplify debugging
+        # cam = cam_f0
+        # x_off = offsets[1]
+        # lr_crop = False
 
-        if cam.intrinsics is None or cam.sensor2lidar_rotation is None or cam.sensor2lidar_translation is None:
-            return None
-        intr = np.array(cam.intrinsics)
-        rot = np.array(cam.sensor2lidar_rotation)
-        trans = np.array(cam.sensor2lidar_translation)
-        img_h_full, img_w_full = cam.image.shape[:2]
-        pc_img, in_fov = _transform_pcs_to_images(lidar_pc, rot, trans, intr, img_shape=(img_h_full, img_w_full))
-        if in_fov[0]:
-            u_full, v_full = pc_img[0]
-            u_crop = u_full - (416 if lr_crop else 0)
-            v_crop = v_full - 28
-            stitched_x = u_crop + x_off
-            stitched_y = v_crop
-            # Return float pixel coordinates (no integer rounding) for debugging
-            px_f = stitched_x * scale_x
-            py_f = stitched_y * scale_y
-            return px_f, py_f
+        # if cam.intrinsics is None or cam.sensor2lidar_rotation is None or cam.sensor2lidar_translation is None:
+        #     return None
+        # intr = np.array(cam.intrinsics)
+        # rot = np.array(cam.sensor2lidar_rotation)
+        # trans = np.array(cam.sensor2lidar_translation)
+        # img_h_full, img_w_full = cam.image.shape[:2]
+        # pc_img, in_fov = _transform_pcs_to_images(lidar_pc, rot, trans, intr, img_shape=(img_h_full, img_w_full))
+        # if in_fov[0]:
+        #     u_full, v_full = pc_img[0]
+        #     u_crop = u_full - (416 if lr_crop else 0)
+        #     v_crop = v_full - 28
+        #     stitched_x = u_crop + x_off
+        #     stitched_y = v_crop
+        #     # Return float pixel coordinates (no integer rounding) for debugging
+        #     px_f = stitched_x * scale_x
+        #     py_f = stitched_y * scale_y
+        #     return px_f, py_f
                 
         return None
 
