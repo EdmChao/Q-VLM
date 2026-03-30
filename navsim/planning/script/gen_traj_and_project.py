@@ -54,6 +54,7 @@ def make_stitched_and_projector(scene, fb):
     cam_r0 = frame.cameras.cam_r0
 
     # cropping logic matches hydra_features._get_camera_feature
+    #truncates top/bottom 28 px and 416 px from sides
     def crop_cam(img, left_right_crop=False):
         if img is None:
             return None
@@ -90,13 +91,14 @@ def make_stitched_and_projector(scene, fb):
         cand = project_to_stitched._select_best_camera(np.array([xy], dtype=np.float32))
         if cand is None:
             return None
-        px_py, in_view_mask, _, _ = cand
+        px_py, in_view_mask, _, _, _, _ = cand
         if in_view_mask[0]:
             return float(px_py[0, 0]), float(px_py[0, 1])
         return None
 
     # Save a callable for batch trajectory projection.
-    def _prepare_camera(cam, x_off, lr_crop):
+    # calculates homographies and offset info
+    def _prepare_camera(cam, x_off, lr_crop, name):
         if cam.intrinsics is None or cam.sensor2lidar_rotation is None or cam.sensor2lidar_translation is None:
             return None
 
@@ -104,21 +106,32 @@ def make_stitched_and_projector(scene, fb):
         if intr.size == 9:
             intr = intr.reshape(3, 3)
 
-        rot_s2l = np.array(cam.sensor2lidar_rotation, dtype=np.float64)
-        if rot_s2l.size == 9:
-            rot_s2l = rot_s2l.reshape(3, 3)
+        R_l2c = None
+        t_l2c = None
 
-        trans_s2l = np.array(cam.sensor2lidar_translation, dtype=np.float64).reshape(3)
+        # Prefer explicit lidar2sensor if available
+        if getattr(cam, 'lidar2sensor_rotation', None) is not None and getattr(cam, 'lidar2sensor_translation', None) is not None:
+            R_l2c = np.array(cam.lidar2sensor_rotation, dtype=np.float64)
+            if R_l2c.size == 9:
+                R_l2c = R_l2c.reshape(3, 3)
+            t_l2c = np.array(cam.lidar2sensor_translation, dtype=np.float64).reshape(3)
 
-        # Convert sensor->lidar to lidar->sensor
-        R_l2c = rot_s2l.T
-        t_l2c = -R_l2c @ trans_s2l
+        # Fallback to sensor2lidar conversion
+        elif getattr(cam, 'sensor2lidar_rotation', None) is not None and getattr(cam, 'sensor2lidar_translation', None) is not None:
+            R_s2l = np.array(cam.sensor2lidar_rotation, dtype=np.float64)
+            if R_s2l.size == 9:
+                R_s2l = R_s2l.reshape(3, 3)
+            t_s2l = np.array(cam.sensor2lidar_translation, dtype=np.float64).reshape(3)
+            R_l2c = R_s2l.T
+            t_l2c = -R_l2c @ t_s2l
 
-        # Homography for ground plane z=0: K * [R[:,0:2], t]
+        if R_l2c is None or t_l2c is None:
+            return None
+
         H = intr @ np.concatenate([R_l2c[:, :2], t_l2c.reshape(3, 1)], axis=1)
 
         return {
-            'name': cam.name if hasattr(cam, 'name') else 'cam',
+            'name': name,
             'intr': intr,
             'R_l2c': R_l2c,
             't_l2c': t_l2c,
@@ -132,44 +145,38 @@ def make_stitched_and_projector(scene, fb):
         }
 
     cams = []
-    cams.append(_prepare_camera(cam_l0, offsets[0], True))
-    cams.append(_prepare_camera(cam_f0, offsets[1], False))
-    cams.append(_prepare_camera(cam_r0, offsets[2], True))
+    cams.append(_prepare_camera(cam_l0, offsets[0], True, 'l0'))
+    cams.append(_prepare_camera(cam_f0, offsets[1], False, 'f0'))
+    cams.append(_prepare_camera(cam_r0, offsets[2], True, 'r0'))
     cams = [c for c in cams if c is not None]
 
+    #apply homography and normalize by depth
     def _project_to_cam(cam_data, xy_pts):
         # xy_pts: (N,2) in ego ground plane
         if xy_pts.size == 0:
-            return np.zeros((0, 2), dtype=np.float32), np.array([], dtype=bool), np.array([], dtype=np.float32), 0.0
+            return np.zeros((0, 2), dtype=np.float32), np.array([], dtype=bool), 1.0, 0.0, 0.0, 0.0
 
-        # 3xN homogeneous points on ground plane
         ones = np.ones((xy_pts.shape[0], 1), dtype=np.float64)
-        xy_hom = np.concatenate([xy_pts.astype(np.float64), ones], axis=1).T  # 3xN
+        xy_hom = np.concatenate([xy_pts.astype(np.float64), ones], axis=1).T
 
-        # project via homography
-        uvw = cam_data['H'] @ xy_hom  # 3xN
-        z = uvw[2, :].astype(np.float64)
-
-        # avoid divide by zero
+        uvw = cam_data['H'] @ xy_hom
+        z = uvw[2, :]
         w = np.where(np.abs(z) < 1e-8, 1e-8, z)
-        u = (uvw[0, :] / w).astype(np.float64)
-        v = (uvw[1, :] / w).astype(np.float64)
+        u = uvw[0, :] / w
+        v = uvw[1, :] / w
 
-        # in camera frustum and image bounds
         in_front = z > 0
         in_img = (u >= 0) & (u < cam_data['img_w']) & (v >= 0) & (v < cam_data['img_h'])
         in_view = in_front & in_img
 
-        # apply crop and stitch offsets
         u_crop = u - cam_data['crop_x']
         v_crop = v - cam_data['crop_y']
         u_stitched = u_crop + cam_data['x_off']
         v_stitched = v_crop
 
-        # map to resized stitched range
         px = u_stitched * scale_x
         py = v_stitched * scale_y
-        points_resized = np.stack([px, py], axis=1).astype(np.float32)
+        points_resized = np.stack([px, py], axis=1)
 
         # center distance normalization factor relative to final image diag
         center = np.array([cam_w * 0.5, cam_h * 0.5], dtype=np.float32)
@@ -187,35 +194,37 @@ def make_stitched_and_projector(scene, fb):
         return points_resized, in_view, mean_center_dist_norm, z_avg
 
     def _select_best_camera(xy_pts, alpha=1.0, beta=0.25, gamma=0.25):
-        # Evaluate all cameras in one go and choose best score.
+        # First round: max in_view count (dominant camera by coverage)
+        # Second round: tiebreak with the score function (in_view_frac+center+depth)
         if len(cams) == 0:
             return None
 
         N = xy_pts.shape[0]
-        best = None
-        best_score = -1e9
-        best_result = None
+        results = []
 
         for cam_data in cams:
             points_resized, in_view, mean_center_dist_norm, z_avg = _project_to_cam(cam_data, xy_pts)
             in_view_count = int(np.sum(in_view))
             in_view_frac = in_view_count / float(N) if N > 0 else 0.0
-
             depth_term = z_avg if z_avg > 0 else 0.0
             depth_term_norm = float(depth_term / (depth_term + 1.0))
-
             score = alpha * in_view_frac + beta * (1 - mean_center_dist_norm) + gamma * depth_term_norm
+            results.append((cam_data, points_resized, in_view, in_view_count, in_view_frac, mean_center_dist_norm, z_avg, score))
 
-            # preserve highest score and tie-break by z_avg (max avg z as requested)
-            if score > best_score or (np.isclose(score, best_score) and depth_term > (best_result[3] if best_result else -1e9)):
-                best_score = score
-                best = cam_data
-                best_result = (points_resized, in_view, mean_center_dist_norm, z_avg)
-
-        if best_result is None:
+        if len(results) == 0:
             return None
 
-        return best_result[0], best_result[1], best_result[2], best_result[3]
+        # choose maximum in_view_count
+        max_in_view = max(r[3] for r in results)
+        candidates = [r for r in results if r[3] == max_in_view]
+
+        # tiebreak with computed score and z_avg
+        best = max(candidates, key=lambda r: (r[7], r[6]))
+        cam_data, points_resized, in_view, _, _, mean_center_dist_norm, z_avg, score = best
+
+        print(f"[select] chosen_cam={cam_data['name']} in_view_count={max_in_view} score={score:.4f} in_view_frac={best[4]:.3f} mean_center_norm={mean_center_dist_norm:.4f} z_avg={z_avg:.4f}")
+
+        return points_resized, in_view, mean_center_dist_norm, z_avg
 
     project_to_stitched._select_best_camera = _select_best_camera
 
@@ -271,7 +280,7 @@ def make_stitched_and_projector(scene, fb):
     #     py_f = stitched_y * scale_y
     #     return px_f, py_f
 
-    return out_img, project_to_stitched
+
     out_img = stitched_resized.copy()
     if out_img.dtype != np.uint8:
         out_img = out_img.astype(np.uint8)
@@ -453,7 +462,8 @@ def draw_bev_topk_and_save(centers, token, total_proposals: int, k: int, overlay
         px = int((x - min_x) * scale) + 10
         py = int((max_y - y) * scale) + 10
         return px, py
-    color_map = [(0, 0, 255), (0, 255, 0), (255, 0, 0), (0, 255, 255), (255, 0, 255), (255, 255, 0)]
+   
+    color_map = [(0, 0, 255), (0, 255, 0), (255, 0, 0), (0, 255, 255), (255, 0, 255), (255, 255, 0), (128, 0, 128), (128, 128, 0), (0, 128, 128), (192, 128, 64)]
     for i in range(centers.shape[0]):
         pts = []
         for t in range(centers.shape[1]):
