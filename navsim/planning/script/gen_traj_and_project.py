@@ -83,60 +83,195 @@ def make_stitched_and_projector(scene, fb):
     offsets = [0, w_l, w_l + w_f]
 
     # helper to project a ground-plane ego (x,y) to stitched_resized pixel coords
+    # This implementation evaluates all three cameras for each trajectory and chooses the
+    # best camera based on in-view count, center distance, and depth-based score.
     def project_to_stitched(xy):
-        lidar_pc = np.zeros((6, 1), dtype=np.float32)
-        lidar_pc[0, 0] = xy[0]
-        lidar_pc[1, 0] = xy[1]
-        lidar_pc[2, 0] = 0.0
-
-        cams = [
-            (cam_l0, offsets[0], True),
-            (cam_f0, offsets[1], False),
-            (cam_r0, offsets[2], True),
-        ]
-
-        for cam, x_off, lr_crop in cams:
-            if cam.intrinsics is None or cam.sensor2lidar_rotation is None or cam.sensor2lidar_translation is None:
-                continue
-            intr = np.array(cam.intrinsics)
-            rot = np.array(cam.sensor2lidar_rotation)
-            trans = np.array(cam.sensor2lidar_translation)
-            img_h_full, img_w_full = cam.image.shape[:2]
-            pc_img, in_fov = _transform_pcs_to_images(lidar_pc, rot, trans, intr, img_shape=(img_h_full, img_w_full))
-            if in_fov[0]:
-                u_full, v_full = pc_img[0]
-                u_crop = u_full - (416 if lr_crop else 0)
-                v_crop = v_full - 28
-                stitched_x = u_crop + x_off
-                stitched_y = v_crop
-                px = int(np.round(stitched_x * scale_x))
-                py = int(np.round(stitched_y * scale_y))
-                return px, py
-        # DEBUG: force front camera only for intrinsics/extrinsics to simplify debugging
-        # cam = cam_f0
-        # x_off = offsets[1]
-        # lr_crop = False
-
-        # if cam.intrinsics is None or cam.sensor2lidar_rotation is None or cam.sensor2lidar_translation is None:
-        #     return None
-        # intr = np.array(cam.intrinsics)
-        # rot = np.array(cam.sensor2lidar_rotation)
-        # trans = np.array(cam.sensor2lidar_translation)
-        # img_h_full, img_w_full = cam.image.shape[:2]
-        # pc_img, in_fov = _transform_pcs_to_images(lidar_pc, rot, trans, intr, img_shape=(img_h_full, img_w_full))
-        # if in_fov[0]:
-        #     u_full, v_full = pc_img[0]
-        #     u_crop = u_full - (416 if lr_crop else 0)
-        #     v_crop = v_full - 28
-        #     stitched_x = u_crop + x_off
-        #     stitched_y = v_crop
-        #     # Return float pixel coordinates (no integer rounding) for debugging
-        #     px_f = stitched_x * scale_x
-        #     py_f = stitched_y * scale_y
-        #     return px_f, py_f
-                
+        # fallback to per-point projection via batch path
+        cand = project_to_stitched._select_best_camera(np.array([xy], dtype=np.float32))
+        if cand is None:
+            return None
+        px_py, in_view_mask, _, _ = cand
+        if in_view_mask[0]:
+            return float(px_py[0, 0]), float(px_py[0, 1])
         return None
 
+    # Save a callable for batch trajectory projection.
+    def _prepare_camera(cam, x_off, lr_crop):
+        if cam.intrinsics is None or cam.sensor2lidar_rotation is None or cam.sensor2lidar_translation is None:
+            return None
+
+        intr = np.array(cam.intrinsics, dtype=np.float64)
+        if intr.size == 9:
+            intr = intr.reshape(3, 3)
+
+        rot_s2l = np.array(cam.sensor2lidar_rotation, dtype=np.float64)
+        if rot_s2l.size == 9:
+            rot_s2l = rot_s2l.reshape(3, 3)
+
+        trans_s2l = np.array(cam.sensor2lidar_translation, dtype=np.float64).reshape(3)
+
+        # Convert sensor->lidar to lidar->sensor
+        R_l2c = rot_s2l.T
+        t_l2c = -R_l2c @ trans_s2l
+
+        # Homography for ground plane z=0: K * [R[:,0:2], t]
+        H = intr @ np.concatenate([R_l2c[:, :2], t_l2c.reshape(3, 1)], axis=1)
+
+        return {
+            'name': cam.name if hasattr(cam, 'name') else 'cam',
+            'intr': intr,
+            'R_l2c': R_l2c,
+            't_l2c': t_l2c,
+            'H': H,
+            'img_w': cam.image.shape[1],
+            'img_h': cam.image.shape[0],
+            'crop_x': 416 if lr_crop else 0,
+            'crop_y': 28,
+            'x_off': x_off,
+            'lr_crop': lr_crop,
+        }
+
+    cams = []
+    cams.append(_prepare_camera(cam_l0, offsets[0], True))
+    cams.append(_prepare_camera(cam_f0, offsets[1], False))
+    cams.append(_prepare_camera(cam_r0, offsets[2], True))
+    cams = [c for c in cams if c is not None]
+
+    def _project_to_cam(cam_data, xy_pts):
+        # xy_pts: (N,2) in ego ground plane
+        if xy_pts.size == 0:
+            return np.zeros((0, 2), dtype=np.float32), np.array([], dtype=bool), np.array([], dtype=np.float32), 0.0
+
+        # 3xN homogeneous points on ground plane
+        ones = np.ones((xy_pts.shape[0], 1), dtype=np.float64)
+        xy_hom = np.concatenate([xy_pts.astype(np.float64), ones], axis=1).T  # 3xN
+
+        # project via homography
+        uvw = cam_data['H'] @ xy_hom  # 3xN
+        z = uvw[2, :].astype(np.float64)
+
+        # avoid divide by zero
+        w = np.where(np.abs(z) < 1e-8, 1e-8, z)
+        u = (uvw[0, :] / w).astype(np.float64)
+        v = (uvw[1, :] / w).astype(np.float64)
+
+        # in camera frustum and image bounds
+        in_front = z > 0
+        in_img = (u >= 0) & (u < cam_data['img_w']) & (v >= 0) & (v < cam_data['img_h'])
+        in_view = in_front & in_img
+
+        # apply crop and stitch offsets
+        u_crop = u - cam_data['crop_x']
+        v_crop = v - cam_data['crop_y']
+        u_stitched = u_crop + cam_data['x_off']
+        v_stitched = v_crop
+
+        # map to resized stitched range
+        px = u_stitched * scale_x
+        py = v_stitched * scale_y
+        points_resized = np.stack([px, py], axis=1).astype(np.float32)
+
+        # center distance normalization factor relative to final image diag
+        center = np.array([cam_w * 0.5, cam_h * 0.5], dtype=np.float32)
+        diag = np.linalg.norm(np.array([cam_w, cam_h], dtype=np.float32))
+
+        if in_view.any():
+            valid_pts = points_resized[in_view]
+            mean_center_dist = np.mean(np.linalg.norm(valid_pts - center, axis=1))
+            mean_center_dist_norm = float(min(mean_center_dist / (diag / 2.0), 1.0))
+            z_avg = float(np.mean(z[in_view]))
+        else:
+            mean_center_dist_norm = 1.0
+            z_avg = 0.0
+
+        return points_resized, in_view, mean_center_dist_norm, z_avg
+
+    def _select_best_camera(xy_pts, alpha=1.0, beta=0.25, gamma=0.25):
+        # Evaluate all cameras in one go and choose best score.
+        if len(cams) == 0:
+            return None
+
+        N = xy_pts.shape[0]
+        best = None
+        best_score = -1e9
+        best_result = None
+
+        for cam_data in cams:
+            points_resized, in_view, mean_center_dist_norm, z_avg = _project_to_cam(cam_data, xy_pts)
+            in_view_count = int(np.sum(in_view))
+            in_view_frac = in_view_count / float(N) if N > 0 else 0.0
+
+            depth_term = z_avg if z_avg > 0 else 0.0
+            depth_term_norm = float(depth_term / (depth_term + 1.0))
+
+            score = alpha * in_view_frac + beta * (1 - mean_center_dist_norm) + gamma * depth_term_norm
+
+            # preserve highest score and tie-break by z_avg (max avg z as requested)
+            if score > best_score or (np.isclose(score, best_score) and depth_term > (best_result[3] if best_result else -1e9)):
+                best_score = score
+                best = cam_data
+                best_result = (points_resized, in_view, mean_center_dist_norm, z_avg)
+
+        if best_result is None:
+            return None
+
+        return best_result[0], best_result[1], best_result[2], best_result[3]
+
+    project_to_stitched._select_best_camera = _select_best_camera
+
+    # keep the old code for rollback/comparison (commented), unchanged below.
+    # lidar_pc = np.zeros((6, 1), dtype=np.float32)
+    # lidar_pc[0, 0] = xy[0]
+    # lidar_pc[1, 0] = xy[1]
+    # lidar_pc[2, 0] = 0.0
+
+    # cams = [
+    #     (cam_l0, offsets[0], True),
+    #     (cam_f0, offsets[1], False),
+    #     (cam_r0, offsets[2], True),
+    # ]
+
+    # for cam, x_off, lr_crop in cams:
+    #     if cam.intrinsics is None or cam.sensor2lidar_rotation is None or cam.sensor2lidar_translation is None:
+    #         continue
+    #     intr = np.array(cam.intrinsics)
+    #     rot = np.array(cam.sensor2lidar_rotation)
+    #     trans = np.array(cam.sensor2lidar_translation)
+    #     img_h_full, img_w_full = cam.image.shape[:2]
+    #     pc_img, in_fov = _transform_pcs_to_images(lidar_pc, rot, trans, intr, img_shape=(img_h_full, img_w_full))
+    #     if in_fov[0]:
+    #         u_full, v_full = pc_img[0]
+    #         u_crop = u_full - (416 if lr_crop else 0)
+    #         v_crop = v_full - 28
+    #         stitched_x = u_crop + x_off
+    #         stitched_y = v_crop
+    #         px = int(np.round(stitched_x * scale_x))
+    #         py = int(np.round(stitched_y * scale_y))
+    #         return px, py
+    # DEBUG: force front camera only for intrinsics/extrinsics to simplify debugging
+    # cam = cam_f0
+    # x_off = offsets[1]
+    # lr_crop = False
+
+    # if cam.intrinsics is None or cam.sensor2lidar_rotation is None or cam.sensor2lidar_translation is None:
+    #     return None
+    # intr = np.array(cam.intrinsics)
+    # rot = np.array(cam.sensor2lidar_rotation)
+    # trans = np.array(cam.sensor2lidar_translation)
+    # img_h_full, img_w_full = cam.image.shape[:2]
+    # pc_img, in_fov = _transform_pcs_to_images(lidar_pc, rot, trans, intr, img_shape=(img_h_full, img_w_full))
+    # if in_fov[0]:
+    #     u_full, v_full = pc_img[0]
+    #     u_crop = u_full - (416 if lr_crop else 0)
+    #     v_crop = v_full - 28
+    #     stitched_x = u_crop + x_off
+    #     stitched_y = v_crop
+    #     # Return float pixel coordinates (no integer rounding) for debugging
+    #     px_f = stitched_x * scale_x
+    #     py_f = stitched_y * scale_y
+    #     return px_f, py_f
+
+    return out_img, project_to_stitched
     out_img = stitched_resized.copy()
     if out_img.dtype != np.uint8:
         out_img = out_img.astype(np.uint8)
@@ -201,21 +336,26 @@ def draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_pro
                 forward_vec = np.array([1.0, 0.0], dtype=np.float32)
         else:
             forward_vec = np.array([1.0, 0.0], dtype=np.float32)
-        for t in range(HORIZON):
-            xy = centers[i, t][:2]
-            # apply visualization-only forward shift to a local copy of xy
-            if shift_i and shift_i != 0.0:
-                xy_shifted = xy + (forward_vec * shift_i)
-            else:
-                xy_shifted = xy
-            p = project_fn(xy_shifted)
-            if p is not None:
-                pts.append(p)
+        # Project the full trajectory with one camera decision and antialias path.
+        traj_xy = centers[i, :, :2].astype(np.float32, copy=False)
+        if shift_i and shift_i != 0.0:
+            traj_xy = traj_xy + (forward_vec * shift_i)
+
+        if hasattr(project_fn, '_select_best_camera'):
+            projected, in_view, mean_center_norm, z_avg = project_fn._select_best_camera(traj_xy)
+            pts = [tuple(pt) for pt, ok in zip(projected.tolist(), in_view.tolist()) if ok]
+        else:
+            # fall back to single-point projection
+            pts = []
+            for t in range(HORIZON):
+                p = project_fn(tuple(traj_xy[t]))
+                if p is not None:
+                    pts.append(p)
+
         if len(pts) >= 2:
             pts_arr = np.array(pts, dtype=np.int32)
-            cv2.polylines(out_img, [pts_arr], isClosed=False, color=color_bgr, thickness=2)
+            cv2.polylines(out_img, [pts_arr], isClosed=False, color=color_bgr, thickness=2, lineType=cv2.LINE_AA)
         elif len(pts) == 1:
-            # pts may contain float coordinates (debug mode returns floats); cast to int for OpenCV
             cx, cy = pts[0]
             cv2.circle(out_img, (int(round(cx)), int(round(cy))), 3, color_bgr, -1)
 
