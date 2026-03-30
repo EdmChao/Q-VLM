@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Dict
 
 import hydra
+import sys
+import argparse
 import numpy as np
 import pytorch_lightning as pl
 import cv2
@@ -942,8 +944,18 @@ def main(cfg: DictConfig) -> None:
         if cfg.get('dataloader') and cfg.dataloader.get('params'):
             dl_cfg = cfg.dataloader.params
         batch_size = int(dl_cfg.get('batch_size', 1)) if dl_cfg is not None else 1
-        num_workers = int(dl_cfg.get('num_workers', 0)) if dl_cfg is not None else 0
+        # Default to 4 workers unless explicitly set in config
+        num_workers = int(dl_cfg.get('num_workers', 4)) if dl_cfg is not None else 4
         pin_memory = bool(dl_cfg.get('pin_memory', False)) if dl_cfg is not None else False
+
+        # Allow CLI override via environment set by startup parser (--workers N)
+        try:
+            override_workers = os.getenv('NAVSIM_OVERRIDE_WORKERS')
+            if override_workers is not None:
+                num_workers = int(override_workers)
+                print(f"Overriding dataloader num_workers with CLI --workers={num_workers}")
+        except Exception:
+            pass
 
         gen_count = str(cfg.get('generate_count', 'one'))
         # gen_count_lower = gen_count.lower()
@@ -1291,4 +1303,14 @@ def main(cfg: DictConfig) -> None:
 
 
 if __name__ == "__main__":
+    # Parse a lightweight CLI arg for --workers and remove it from sys.argv
+    # so Hydra won't attempt to parse it. If provided, store override in env var
+    # NAVSIM_OVERRIDE_WORKERS for use inside `main()`.
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument('--workers', type=int, default=None, help='Override dataloader num_workers')
+    args, remaining = parser.parse_known_args()
+    if args.workers is not None:
+        os.environ['NAVSIM_OVERRIDE_WORKERS'] = str(int(args.workers))
+        # remove the parsed args so hydra receives a clean argv
+        sys.argv = [sys.argv[0]] + remaining
     main()
