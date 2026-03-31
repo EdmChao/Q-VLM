@@ -51,8 +51,7 @@ k: 10
 #use gtrs scoring or not
 use_gtrs_dense_scoring: True
 
-# Optionally restrict which GPUs are visible to PyTorch/Lightning
-cuda_visible_devices: "5,6, 7" # Example: "4,5,6,7" to use only GPUs 4-7; set to null to use all
+# CUDA device visibility should be set via the CLI (--devices) or the environment.
 
 # Debug / visualization defaults used by gen_traj_and_project.py
 debug:
@@ -63,7 +62,7 @@ debug:
     # multiplier applied to (desired_min_dist - start_dist) to compute shift
     shift_scale: 1.0
     # optional clamp on per-trajectory shift (meters). Set to null to disable.
-    max_shift: null
+    max_shift: 10
     # Enable single-pass adaptive shifting by in-view coverage instead of static shift.
     enable_single_pass_shift: false
     # Desired fraction of points in view in the stitched image (0.0-1.0).

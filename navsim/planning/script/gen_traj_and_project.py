@@ -151,6 +151,14 @@ def make_stitched_and_projector(scene, fb):
     cams.append(_prepare_camera(cam_f0, offsets[1], False, 'f0'))
     cams.append(_prepare_camera(cam_r0, offsets[2], True, 'r0'))
     cams = [c for c in cams if c is not None]
+    # Prefer the front camera to avoid cross-camera projection inconsistencies.
+    # If the front camera is available, use it exclusively; otherwise fall back.
+    try:
+        front_only = [c for c in cams if c.get('name') == 'f0']
+        if len(front_only) > 0:
+            cams = front_only
+    except Exception:
+        pass
 
     #apply homography and normalize by depth
     def _project_to_cam(cam_data, xy_pts):
@@ -296,7 +304,7 @@ def make_stitched_and_projector(scene, fb):
     return out_img, project_to_stitched
 
 
-def draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_proposals=None, min_start_dist=None, per_traj_shifts=None, vis_params=None):
+def draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_proposals=None, min_start_dist=None, vis_params=None):
     """
     Draw multiple trajectories onto a stitched image and save overlay files.
 
@@ -342,74 +350,88 @@ def draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_pro
     # will be written into output text after overlay drawing
     per_traj_stats = []  # tuples (shift, in_view_before, in_view_after)
 
+    # Prepare centers copy for optional adaptive shifting. If enabled,
+    # compute shifted centers for the first `k` proposals.
+    centers_to_draw = centers
+    initial_in_views = None
+    final_in_views = None
+    applied_shifts = None
+    if enable_single_pass and centers is not None and centers.size != 0 and hasattr(project_fn, '_select_best_camera'):
+        try:
+            # adaptive_shift operates on a set of trajectories and returns
+            # shifted copies + diagnostics
+            shifted, initial_in_views, final_in_views, applied_shifts = adaptive_shift(
+                centers[:k], project_fn, in_view_threshold, shift_step, max_shift_allowed
+            )
+            # keep a copy of original centers and replace x,y for first k
+            centers_to_draw = centers.copy()
+            centers_to_draw[: shifted.shape[0], :, :2] = shifted[:, :, :2]
+            if log_in_view_counts:
+                for idx in range(shifted.shape[0]):
+                    print(f"[adaptive_shift] traj={idx} shift_m={applied_shifts[idx]:.4f} in_view_before={int(initial_in_views[idx])} in_view_after={int(final_in_views[idx])}")
+        except Exception:
+            print("Warning: adaptive_shift failed; proceeding without shifts")
+            centers_to_draw = centers
+
     for i in range(k):
         color_str, color_bgr = color_map[i % len(color_map)]
         in_view_before = 0
         in_view_after = 0
         pts = []
-        # determine per-trajectory shift and forward vector
-        shift_i = 0.0
-        if per_traj_shifts is not None:
-            try:
-                shift_i = float(per_traj_shifts[i])
-            except Exception:
-                shift_i = 0.0
 
-        if centers is not None and centers.size != 0 and centers.shape[1] > 1:
-            v0 = centers[i, 1, :2] - centers[i, 0, :2]
-            # Use absolute direction to ensure forward visualization shift
-            # moves points forward even when initial motion is negative/backward.
-            v0_abs = np.abs(v0)
-            norm = np.linalg.norm(v0_abs)
-            if norm > 1e-6:
-                forward_vec = v0_abs / norm
-            else:
-                forward_vec = np.array([1.0, 0.0], dtype=np.float32)
+        # Use centers_to_draw (may be shifted by adaptive_shift) for projection
+        if centers_to_draw is None or centers_to_draw.size == 0:
+            traj_xy_base = None
         else:
-            forward_vec = np.array([1.0, 0.0], dtype=np.float32)
+            traj_xy_base = centers_to_draw[i, :, :2].astype(np.float32, copy=False)
 
-        traj_xy_base = centers[i, :, :2].astype(np.float32, copy=False)
+        applied_shift = 0.0
 
-        applied_shift = shift_i
-        if hasattr(project_fn, '_select_best_camera') and enable_single_pass and per_traj_shifts is None:
-            # single-pass adaptive shift to reach minimum in-view count
-            target_in_view = int(np.ceil(in_view_threshold * HORIZON))
-            while True:
-                cand = project_fn._select_best_camera(traj_xy_base + forward_vec * applied_shift)
-                if cand is None:
+        # If adaptive shifting ran, use its diagnostics
+        if enable_single_pass and (applied_shifts is not None):
+            applied_shift = float(applied_shifts[i]) if i < applied_shifts.shape[0] else 0.0
+            in_view_before = int(initial_in_views[i]) if (initial_in_views is not None and i < initial_in_views.shape[0]) else 0
+            in_view_after = int(final_in_views[i]) if (final_in_views is not None and i < final_in_views.shape[0]) else 0
+
+            # compute projected points for the shifted trajectory
+            if traj_xy_base is None:
+                pts = []
+                in_view_after = 0
+            elif hasattr(project_fn, '_select_best_camera'):
+                cand = project_fn._select_best_camera(traj_xy_base)
+                if cand is not None:
+                    projected, in_view, mean_center_norm, z_avg = cand
+                    pts = [tuple(pt) for pt, ok in zip(projected.tolist(), in_view.tolist()) if ok]
+                else:
                     pts = []
                     in_view_after = 0
-                    break
+            else:
+                pts = []
+                for t in range(HORIZON):
+                    p = project_fn(tuple(traj_xy_base[t]))
+                    if p is not None:
+                        pts.append(p)
 
-                projected, in_view, mean_center_norm, z_avg = cand
-                cur_in_view = int(np.sum(in_view))
-                if applied_shift == 0.0:
-                    in_view_before = cur_in_view
-
-                if cur_in_view >= target_in_view or applied_shift >= max_shift_allowed:
-                    in_view_after = cur_in_view
-                    pts = [tuple(pt) for pt, ok in zip(projected.tolist(), in_view.tolist()) if ok]
-                    break
-
-                applied_shift += shift_step
-                if applied_shift > max_shift_allowed:
-                    applied_shift = max_shift_allowed
-
-        elif hasattr(project_fn, '_select_best_camera'):
-            cand = project_fn._select_best_camera(traj_xy_base + forward_vec * applied_shift)
+        elif traj_xy_base is not None and hasattr(project_fn, '_select_best_camera'):
+            cand = project_fn._select_best_camera(traj_xy_base)
             if cand is not None:
                 projected, in_view, mean_center_norm, z_avg = cand
                 in_view_before = int(np.sum(in_view))
                 in_view_after = in_view_before
                 pts = [tuple(pt) for pt, ok in zip(projected.tolist(), in_view.tolist()) if ok]
+            else:
+                pts = []
+                in_view_before = 0
+                in_view_after = 0
 
         else:
             # fall back to single-point projection
             pts = []
-            for t in range(HORIZON):
-                p = project_fn(tuple(traj_xy_base[t]))
-                if p is not None:
-                    pts.append(p)
+            if traj_xy_base is not None:
+                for t in range(HORIZON):
+                    p = project_fn(tuple(traj_xy_base[t]))
+                    if p is not None:
+                        pts.append(p)
 
         # draw the projected trajectory
         if len(pts) >= 2:
@@ -450,10 +472,7 @@ def draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_pro
             ftxt.write("shift_m,in_view_before,in_view_after\n")
             for shift_val, in_before, in_after in per_traj_stats:
                 ftxt.write(f"{float(shift_val):.4f},{int(in_before)},{int(in_after)}\n")
-        elif per_traj_shifts is not None:
-            ftxt.write("--APPLIED_SHIFTS--\n")
-            for si in per_traj_shifts:
-                ftxt.write(f"{float(si):.4f}\n")
+        # Note: naive per-trajectory shifts were removed; see above.
         ftxt.write("--PROJECTED_PIXEL_COORDS--\n")
         for line in polyline_strings:
             ftxt.write(line + "\n")
@@ -555,29 +574,109 @@ def compute_start_distances(centers: np.ndarray) -> np.ndarray:
     return dists
 
 
-def compute_shift_amounts(start_distances: np.ndarray, desired_min_dist: float = 8.0, shift_scale: float = 1.0, max_shift: float = None) -> np.ndarray:
+def adaptive_shift(centers: np.ndarray, project_fn, in_view_threshold: float, shift_step: float, max_shift_allowed: float):
     """
-    Compute per-trajectory forward-shift amounts for visualization only.
-
-    shift = 0 if start_dist >= desired_min_dist else (desired_min_dist - start_dist) * shift_scale
-    Optionally clamp to max_shift.
+    Adaptively shift trajectories straight forward (positive X) until the
+    fraction of points projected in-view meets `in_view_threshold` or the
+    `max_shift_allowed` is reached.
 
     Args:
-        start_distances: (K,) array of start distances
-        desired_min_dist: distance threshold (meters)
-        shift_scale: multiplier for computed shift
-        max_shift: optional float to clamp shifts
+        centers: (K, H, D) numpy array of trajectories in ego-frame.
+        project_fn: projector with `_select_best_camera(xy_pts)` or point-level
+                    `project_fn((x,y)) -> (px,py) or None`.
+        in_view_threshold: fraction in [0,1] of points required to be in view.
+        shift_step: incremental shift step in meters.
+        max_shift_allowed: maximum allowed shift in meters.
 
     Returns:
-        shifts: (K,) numpy array of shift amounts (meters)
+        shifted_centers: (K, H, D) numpy array (copy) with x/y shifted.
+        initial_in_views: (K,) int array of in-view counts before shifting.
+        final_in_views: (K,) int array of in-view counts after shifting.
+        applied_shifts: (K,) float array of applied shifts (meters).
     """
-    if start_distances is None or start_distances.size == 0:
-        return np.array([])
-    delta = np.maximum(0.0, desired_min_dist - start_distances)
-    shifts = delta * float(shift_scale)
-    if max_shift is not None:
-        shifts = np.minimum(shifts, float(max_shift))
-    return shifts
+    if centers is None or centers.size == 0:
+        return centers, np.array([], dtype=int), np.array([], dtype=int), np.array([], dtype=float)
+
+    K, H, D = centers.shape
+    shifted = centers.copy().astype(np.float32)
+    initial_in = np.zeros((K,), dtype=int)
+    final_in = np.zeros((K,), dtype=int)
+    applied_shifts = np.zeros((K,), dtype=float)
+
+    # fixed forward shift direction: ego +X
+    shift_dir = np.array([1.0, 0.0], dtype=np.float32)
+
+    # target number of points in view
+    target_count = int(np.ceil(in_view_threshold * float(H))) if H > 0 else 0
+
+    for i in range(K):
+        traj_xy = centers[i, :, :2].astype(np.float32, copy=False)
+        applied = 0.0
+
+        # prefer batch camera projection if available
+        if hasattr(project_fn, '_select_best_camera'):
+            cand = project_fn._select_best_camera(traj_xy + applied * shift_dir)
+            if cand is None:
+                initial_in[i] = 0
+                final_in[i] = 0
+                applied_shifts[i] = 0.0
+                continue
+
+            _, in_view, _, _ = cand
+            cur_in = int(np.sum(in_view))
+            initial_in[i] = cur_in
+
+            # incrementally shift until target met or max reached
+            while (cur_in < target_count) and (applied < float(max_shift_allowed)):
+                applied += float(shift_step)
+                if applied > float(max_shift_allowed):
+                    applied = float(max_shift_allowed)
+                cand = project_fn._select_best_camera(traj_xy + applied * shift_dir)
+                if cand is None:
+                    cur_in = 0
+                    break
+                _, in_view, _, _ = cand
+                cur_in = int(np.sum(in_view))
+
+            final_in[i] = cur_in
+            applied_shifts[i] = float(applied)
+            if applied_shifts[i] > 0.0:
+                shifted[i, :, 0] = shifted[i, :, 0] + applied_shifts[i] * shift_dir[0]
+                shifted[i, :, 1] = shifted[i, :, 1] + applied_shifts[i] * shift_dir[1]
+
+        else:
+            # fallback: per-point projection
+            def count_in_view(traj_pts):
+                cnt = 0
+                for t in range(traj_pts.shape[0]):
+                    try:
+                        p = project_fn(tuple(traj_pts[t]))
+                    except Exception:
+                        p = None
+                    if p is not None:
+                        cnt += 1
+                return cnt
+
+            cur_in = count_in_view(traj_xy)
+            initial_in[i] = cur_in
+            while (cur_in < target_count) and (applied < float(max_shift_allowed)):
+                applied += float(shift_step)
+                if applied > float(max_shift_allowed):
+                    applied = float(max_shift_allowed)
+                shifted_xy = traj_xy + applied * shift_dir
+                cur_in = count_in_view(shifted_xy)
+
+            final_in[i] = cur_in
+            applied_shifts[i] = float(applied)
+            if applied_shifts[i] > 0.0:
+                shifted[i, :, 0] = shifted[i, :, 0] + applied_shifts[i] * shift_dir[0]
+                shifted[i, :, 1] = shifted[i, :, 1] + applied_shifts[i] * shift_dir[1]
+
+    return shifted, initial_in, final_in, applied_shifts
+
+
+# Note: naive start-distance-based shifting logic removed. Adaptive
+# shifting will be implemented separately by the caller when desired.
 
 
 def score_and_select_trajectories_gtrs_dense(
@@ -939,11 +1038,8 @@ def collect_features_by_token(dataloader):
 @hydra.main(config_path=CONFIG_PATH, config_name=CONFIG_NAME, version_base=None)
 def main(cfg: DictConfig) -> None:
     try:
-        # Optionally set CUDA_VISIBLE_DEVICES from config
-        cuda_env = getattr(cfg, 'cuda_visible_devices', None)
-        if cuda_env is not None and str(cuda_env).lower() != 'null':
-            os.environ['CUDA_VISIBLE_DEVICES'] = str(cuda_env)
-            print(f"Set CUDA_VISIBLE_DEVICES to {cuda_env}")
+        # CUDA device visibility should be controlled via CLI override (--devices)
+        # or environment. Do not set from config by default so all devices remain visible.
         # instantiate main agent (diffusion/DP) and separate GTRS scorer agent
         agent = instantiate(cfg.agent)
         agent.initialize()
@@ -1340,11 +1436,11 @@ def main(cfg: DictConfig) -> None:
                     in_view_threshold = 0.65
                     shift_step = 0.5
                     log_in_view = False
-                per_traj_shifts = compute_shift_amounts(start_dists, desired_min_dist=desired_min, shift_scale=shift_scale, max_shift=max_shift)
+                # naive per-trajectory shifts removed; adaptive shifting can be
+                # implemented by the caller and passed via vis_params if needed.
             except Exception:
                 start_dists = np.array([])
                 min_start = None
-                per_traj_shifts = None
                 enable_single_pass = False
                 in_view_threshold = 0.65
                 shift_step = 0.5
@@ -1359,7 +1455,7 @@ def main(cfg: DictConfig) -> None:
             }
 
             # save stitched image overlays and BEV visualization (BEV saved in same overlay dir)
-            draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_proposals=N, min_start_dist=min_start, per_traj_shifts=per_traj_shifts, vis_params=vis_params)
+            draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_proposals=N, min_start_dist=min_start, vis_params=vis_params)
             try:
                 # pass same overlay_dir used by draw_trajectories_and_save so files co-locate
                 out_dir = os.getenv('NAVSIM_EXP_ROOT')
@@ -1383,9 +1479,14 @@ if __name__ == "__main__":
     # NAVSIM_OVERRIDE_WORKERS for use inside `main()`.
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument('--workers', type=int, default=None, help='Override dataloader num_workers')
+    parser.add_argument('--devices', type=str, default=None, help='Comma-separated CUDA device ids to set as CUDA_VISIBLE_DEVICES')
     args, remaining = parser.parse_known_args()
     if args.workers is not None:
         os.environ['NAVSIM_OVERRIDE_WORKERS'] = str(int(args.workers))
-        # remove the parsed args so hydra receives a clean argv
-        sys.argv = [sys.argv[0]] + remaining
+    if args.devices is not None:
+        # Set CUDA_VISIBLE_DEVICES from CLI; this restricts visible GPUs for the process
+        os.environ['CUDA_VISIBLE_DEVICES'] = str(args.devices)
+        print(f"Overriding CUDA_VISIBLE_DEVICES with CLI --devices={args.devices}")
+    # remove the parsed args so hydra receives a clean argv
+    sys.argv = [sys.argv[0]] + remaining
     main()
