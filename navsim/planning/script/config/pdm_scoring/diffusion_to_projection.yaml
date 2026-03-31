@@ -52,7 +52,7 @@ k: 10
 use_gtrs_dense_scoring: True
 
 # Optionally restrict which GPUs are visible to PyTorch/Lightning
-cuda_visible_devices: null # Example: "4,5,6,7" to use only GPUs 4-7; set to null to use all
+cuda_visible_devices: "5,6, 7" # Example: "4,5,6,7" to use only GPUs 4-7; set to null to use all
 
 # Debug / visualization defaults used by gen_traj_and_project.py
 debug:
