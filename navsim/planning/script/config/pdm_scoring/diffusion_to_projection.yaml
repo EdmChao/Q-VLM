@@ -64,3 +64,11 @@ debug:
     shift_scale: 1.0
     # optional clamp on per-trajectory shift (meters). Set to null to disable.
     max_shift: null
+    # Enable single-pass adaptive shifting by in-view coverage instead of static shift.
+    enable_single_pass_shift: false
+    # Desired fraction of points in view in the stitched image (0.0-1.0).
+    in_view_threshold: 0.65
+    # Step size (meters) for each additional shift when in_view < threshold.
+    shift_step: 0.5
+    # Optional logging of in-view counts before/after in output text.
+    log_in_view_counts: true

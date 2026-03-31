@@ -216,6 +216,12 @@ def make_stitched_and_projector(scene, fb):
         if len(results) == 0:
             return None
 
+        # Force front camera only (f0) to avoid inconsistent angle switching.
+        # If front camera metadata isn't available, keep all as fallback.
+        front_results = [r for r in results if r[0].get('name') == 'f0']
+        if len(front_results) > 0:
+            results = front_results
+
         # choose maximum in_view_count
         max_in_view = max(r[3] for r in results)
         candidates = [r for r in results if r[3] == max_in_view]
@@ -290,7 +296,7 @@ def make_stitched_and_projector(scene, fb):
     return out_img, project_to_stitched
 
 
-def draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_proposals=None, min_start_dist=None, per_traj_shifts=None):
+def draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_proposals=None, min_start_dist=None, per_traj_shifts=None, vis_params=None):
     """
     Draw multiple trajectories onto a stitched image and save overlay files.
 
@@ -324,8 +330,22 @@ def draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_pro
     polyline_strings = []
     HORIZON = centers.shape[1]
 
+    if vis_params is None:
+        vis_params = {}
+
+    enable_single_pass = bool(vis_params.get('enable_single_pass_shift', False))
+    in_view_threshold = float(vis_params.get('in_view_threshold', 0.65))
+    shift_step = float(vis_params.get('shift_step', 0.5))
+    max_shift_allowed = float(vis_params.get('max_shift', 20.0))
+    log_in_view_counts = bool(vis_params.get('log_in_view_counts', True))
+
+    # will be written into output text after overlay drawing
+    per_traj_stats = []  # tuples (shift, in_view_before, in_view_after)
+
     for i in range(k):
         color_str, color_bgr = color_map[i % len(color_map)]
+        in_view_before = 0
+        in_view_after = 0
         pts = []
         # determine per-trajectory shift and forward vector
         shift_i = 0.0
@@ -334,7 +354,7 @@ def draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_pro
                 shift_i = float(per_traj_shifts[i])
             except Exception:
                 shift_i = 0.0
-        # compute forward vector from first motion vector when available
+
         if centers is not None and centers.size != 0 and centers.shape[1] > 1:
             v0 = centers[i, 1, :2] - centers[i, 0, :2]
             # Use absolute direction to ensure forward visualization shift
@@ -347,22 +367,51 @@ def draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_pro
                 forward_vec = np.array([1.0, 0.0], dtype=np.float32)
         else:
             forward_vec = np.array([1.0, 0.0], dtype=np.float32)
-        # Project the full trajectory with one camera decision and antialias path.
-        traj_xy = centers[i, :, :2].astype(np.float32, copy=False)
-        if shift_i and shift_i != 0.0:
-            traj_xy = traj_xy + (forward_vec * shift_i)
 
-        if hasattr(project_fn, '_select_best_camera'):
-            projected, in_view, mean_center_norm, z_avg = project_fn._select_best_camera(traj_xy)
-            pts = [tuple(pt) for pt, ok in zip(projected.tolist(), in_view.tolist()) if ok]
+        traj_xy_base = centers[i, :, :2].astype(np.float32, copy=False)
+
+        applied_shift = shift_i
+        if hasattr(project_fn, '_select_best_camera') and enable_single_pass and per_traj_shifts is None:
+            # single-pass adaptive shift to reach minimum in-view count
+            target_in_view = int(np.ceil(in_view_threshold * HORIZON))
+            while True:
+                cand = project_fn._select_best_camera(traj_xy_base + forward_vec * applied_shift)
+                if cand is None:
+                    pts = []
+                    in_view_after = 0
+                    break
+
+                projected, in_view, mean_center_norm, z_avg = cand
+                cur_in_view = int(np.sum(in_view))
+                if applied_shift == 0.0:
+                    in_view_before = cur_in_view
+
+                if cur_in_view >= target_in_view or applied_shift >= max_shift_allowed:
+                    in_view_after = cur_in_view
+                    pts = [tuple(pt) for pt, ok in zip(projected.tolist(), in_view.tolist()) if ok]
+                    break
+
+                applied_shift += shift_step
+                if applied_shift > max_shift_allowed:
+                    applied_shift = max_shift_allowed
+
+        elif hasattr(project_fn, '_select_best_camera'):
+            cand = project_fn._select_best_camera(traj_xy_base + forward_vec * applied_shift)
+            if cand is not None:
+                projected, in_view, mean_center_norm, z_avg = cand
+                in_view_before = int(np.sum(in_view))
+                in_view_after = in_view_before
+                pts = [tuple(pt) for pt, ok in zip(projected.tolist(), in_view.tolist()) if ok]
+
         else:
             # fall back to single-point projection
             pts = []
             for t in range(HORIZON):
-                p = project_fn(tuple(traj_xy[t]))
+                p = project_fn(tuple(traj_xy_base[t]))
                 if p is not None:
                     pts.append(p)
 
+        # draw the projected trajectory
         if len(pts) >= 2:
             pts_arr = np.array(pts, dtype=np.int32)
             cv2.polylines(out_img, [pts_arr], isClosed=False, color=color_bgr, thickness=2, lineType=cv2.LINE_AA)
@@ -375,6 +424,7 @@ def draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_pro
         else:
             coord_str = ""
         polyline_strings.append(f"{color_str}: {coord_str}")
+        per_traj_stats.append((applied_shift, in_view_before, in_view_after))
 
     out_dir = os.getenv('NAVSIM_EXP_ROOT')
     if out_dir is None:
@@ -395,7 +445,12 @@ def draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_pro
         # write computed start-distance diagnostics if provided
         if min_start_dist is not None:
             ftxt.write(f"MIN_START_DIST: {float(min_start_dist):.4f}\n")
-        if per_traj_shifts is not None:
+        if per_traj_stats:
+            ftxt.write("--APPLIED_SHIFTS_AND_IN_VIEW--\n")
+            ftxt.write("shift_m,in_view_before,in_view_after\n")
+            for shift_val, in_before, in_after in per_traj_stats:
+                ftxt.write(f"{float(shift_val):.4f},{int(in_before)},{int(in_after)}\n")
+        elif per_traj_shifts is not None:
             ftxt.write("--APPLIED_SHIFTS--\n")
             for si in per_traj_shifts:
                 ftxt.write(f"{float(si):.4f}\n")
@@ -1273,18 +1328,38 @@ def main(cfg: DictConfig) -> None:
                     shift_scale = float(getattr(vis_cfg, 'shift_scale', 1.0))
                     max_shift = getattr(vis_cfg, 'max_shift', None)
                     max_shift = None if max_shift is None else float(max_shift)
+                    enable_single_pass = bool(getattr(vis_cfg, 'enable_single_pass_shift', False))
+                    in_view_threshold = float(getattr(vis_cfg, 'in_view_threshold', 0.65))
+                    shift_step = float(getattr(vis_cfg, 'shift_step', 0.5))
+                    log_in_view = bool(getattr(vis_cfg, 'log_in_view_counts', True))
                 except Exception:
                     desired_min = 8.0
                     shift_scale = 1.0
                     max_shift = None
+                    enable_single_pass = False
+                    in_view_threshold = 0.65
+                    shift_step = 0.5
+                    log_in_view = False
                 per_traj_shifts = compute_shift_amounts(start_dists, desired_min_dist=desired_min, shift_scale=shift_scale, max_shift=max_shift)
             except Exception:
                 start_dists = np.array([])
                 min_start = None
                 per_traj_shifts = None
+                enable_single_pass = False
+                in_view_threshold = 0.65
+                shift_step = 0.5
+                log_in_view = False
+
+            vis_params = {
+                'enable_single_pass_shift': enable_single_pass,
+                'in_view_threshold': in_view_threshold,
+                'shift_step': shift_step,
+                'max_shift': float(max_shift) if max_shift is not None else 20.0,
+                'log_in_view_counts': log_in_view,
+            }
 
             # save stitched image overlays and BEV visualization (BEV saved in same overlay dir)
-            draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_proposals=N, min_start_dist=min_start, per_traj_shifts=per_traj_shifts)
+            draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_proposals=N, min_start_dist=min_start, per_traj_shifts=per_traj_shifts, vis_params=vis_params)
             try:
                 # pass same overlay_dir used by draw_trajectories_and_save so files co-locate
                 out_dir = os.getenv('NAVSIM_EXP_ROOT')
