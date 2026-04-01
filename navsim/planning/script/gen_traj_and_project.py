@@ -310,7 +310,7 @@ def draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_pro
 
     This helper draws up to `k` trajectories (RGB polylines) using the
     provided projection function to map trajectory (x,y) coordinates into
-    stitched image pixels. It writes an overlay PNG and a text file describing
+    stitched image pixels. It writes an overlay jpg and a text file describing
     per-trajectory pixel coordinates. Useful as a standalone visualization
     utility when inspecting selected proposals.
 
@@ -454,7 +454,7 @@ def draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_pro
     else:
         overlay_dir = Path(out_dir) / f"{k}_proposals"
     overlay_dir.mkdir(parents=True, exist_ok=True)
-    out_img_path = overlay_dir / f"traj_overlay_{k}_{token}.png"
+    out_img_path = overlay_dir / f"traj_overlay_{k}_{token}.jpg"
     cv2.imwrite(str(out_img_path), out_img)
     print(f'Wrote overlay image to {out_img_path}')
 
@@ -487,13 +487,186 @@ def draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_pro
             for i in range(centers.shape[0]):
                 coords = ";".join([f"{float(x):.4f},{float(y):.4f}" for (x, y) in centers[i, :, :2]])
                 ftxt.write(f"traj_{i}: {coords}\n")
-        # Also write per-trajectory start distances if available (for diagnostics)
-        if centers is not None and centers.size != 0 and min_start_dist is not None:
-            ftxt.write("--START_DISTANCES--\n")
-            for i in range(centers.shape[0]):
-                start_dist_i = float(np.linalg.norm(centers[i, 0, :2]))
-                ftxt.write(f"traj_{i}: {start_dist_i:.4f}\n")
+            # Also write per-trajectory start distances if available (for diagnostics)
+            if centers is not None and centers.size != 0 and min_start_dist is not None:
+                ftxt.write("--START_DISTANCES--\n")
+                for i in range(centers.shape[0]):
+                    start_dist_i = float(np.linalg.norm(centers[i, 0, :2]))
+                    ftxt.write(f"traj_{i}: {start_dist_i:.4f}\n")
+
+            # Additionally compute and write trajectory distance diagnostics so users
+            # can reason about scale/shift needs for exemplar trajectories.
+            # For each trajectory we log: distance(origin->start), distance(origin->end), displacement(start->end)
+            if centers is not None and centers.size != 0:
+                ftxt.write("--TRAJ_DISTANCES--\n")
+                ftxt.write("start_to_origin,end_to_origin,displacement\n")
+                for i in range(centers.shape[0]):
+                    start_xy = centers[i, 0, :2]
+                    end_xy = centers[i, -1, :2]
+                    start_to_origin = float(np.linalg.norm(start_xy))
+                    end_to_origin = float(np.linalg.norm(end_xy))
+                    displacement = float(np.linalg.norm(end_xy - start_xy))
+                    ftxt.write(f"{start_to_origin:.4f},{end_to_origin:.4f},{displacement:.4f}\n")
     print(f'Wrote trajectory strings to {out_txt_path}')
+
+
+def make_frontcam_projector(scene, fb):
+    """
+    Prototype projector that uses front-camera intrinsics/extrinsics and
+    `_transform_pcs_to_images` for 3D-to-image projection. Returns a stitched
+    resized image (same layout as `make_stitched_and_projector`) and a
+    `project_to_stitched_3d` callable with a `_select_best_camera` batch API.
+
+    This intentionally uses only the front camera for projection (f0).
+    """
+    frame_idx = scene.scene_metadata.num_history_frames - 1
+    frame = scene.frames[frame_idx]
+
+    cam_l0 = frame.cameras.cam_l0
+    cam_f0 = frame.cameras.cam_f0
+    cam_r0 = frame.cameras.cam_r0
+
+    def crop_cam(img, left_right_crop=False):
+        if img is None:
+            return None
+        if left_right_crop:
+            return img[28:-28, 416:-416]
+        else:
+            return img[28:-28]
+
+    l0_crop = crop_cam(cam_l0.image, left_right_crop=True)
+    f0_crop = crop_cam(cam_f0.image, left_right_crop=False)
+    r0_crop = crop_cam(cam_r0.image, left_right_crop=True)
+
+    if l0_crop is None or f0_crop is None or r0_crop is None:
+        return None, None
+
+    stitched = np.concatenate([l0_crop, f0_crop, r0_crop], axis=1)
+    cam_w = fb._config.camera_width
+    cam_h = fb._config.camera_height
+    stitched_resized = cv2.resize(stitched, (cam_w, cam_h))
+
+    # pre-resize tile widths and offsets
+    w_l, w_f, w_r = l0_crop.shape[1], f0_crop.shape[1], r0_crop.shape[1]
+    stitched_w = w_l + w_f + w_r
+    stitched_h = stitched.shape[0]
+    scale_x = cam_w / stitched_w
+    scale_y = cam_h / stitched_h
+    offsets = [0, w_l, w_l + w_f]
+
+    # prepare front camera intrinsics/extrinsics
+    cam = cam_f0
+    if cam.intrinsics is None:
+        return stitched_resized, None
+
+    intr = np.array(cam.intrinsics, dtype=np.float64)
+    if intr.size == 9:
+        intr = intr.reshape(3, 3)
+
+    # prefer sensor2lidar when calling _transform_pcs_to_images (matches earlier usage)
+    rot = None
+    trans = None
+    if getattr(cam, 'sensor2lidar_rotation', None) is not None and getattr(cam, 'sensor2lidar_translation', None) is not None:
+        rot = np.array(cam.sensor2lidar_rotation, dtype=np.float64)
+        if rot.size == 9:
+            rot = rot.reshape(3, 3)
+        trans = np.array(cam.sensor2lidar_translation, dtype=np.float64).reshape(3)
+    elif getattr(cam, 'lidar2sensor_rotation', None) is not None and getattr(cam, 'lidar2sensor_translation', None) is not None:
+        R_l2s = np.array(cam.lidar2sensor_rotation, dtype=np.float64)
+        if R_l2s.size == 9:
+            R_l2s = R_l2s.reshape(3, 3)
+        t_l2s = np.array(cam.lidar2sensor_translation, dtype=np.float64).reshape(3)
+        # compute sensor2lidar from lidar2sensor
+        rot = R_l2s.T
+        trans = -rot @ t_l2s
+    else:
+        return stitched_resized, None
+
+    img_h_full, img_w_full = cam.image.shape[:2]
+
+    # cropping offsets for front camera (no left-right crop)
+    crop_x = 0
+    crop_y = 28
+    x_off = offsets[1]
+
+    def _select_best_camera_3d(xy_pts):
+        # xy_pts: (N,2) ego ground plane
+        if xy_pts.size == 0:
+            return np.zeros((0, 2), dtype=np.float32), np.array([], dtype=bool), 1.0, 0.0
+
+        N = xy_pts.shape[0]
+        # construct lidar_pc shape (6, N) as expected by _transform_pcs_to_images
+        lidar_pc = np.zeros((6, N), dtype=np.float32)
+        lidar_pc[0, :] = xy_pts[:, 0]
+        lidar_pc[1, :] = xy_pts[:, 1]
+        lidar_pc[2, :] = 0.0
+
+        try:
+            pc_img, in_fov = _transform_pcs_to_images(lidar_pc, rot, trans, intr, img_shape=(img_h_full, img_w_full))
+        except Exception:
+            return None
+
+        # pc_img: (N,2) in full image pixels
+        u_full = pc_img[:, 0]
+        v_full = pc_img[:, 1]
+
+        u_crop = u_full - crop_x
+        v_crop = v_full - crop_y
+        u_stitched = u_crop + x_off
+        v_stitched = v_crop
+
+        px = u_stitched * scale_x
+        py = v_stitched * scale_y
+        points_resized = np.stack([px, py], axis=1)
+
+        in_view = np.array(in_fov, dtype=bool)
+
+        # approximate center distance normalization
+        center = np.array([cam_w * 0.5, cam_h * 0.5], dtype=np.float32)
+        diag = np.linalg.norm(np.array([cam_w, cam_h], dtype=np.float32))
+        if in_view.any():
+            valid_pts = points_resized[in_view]
+            mean_center_dist = np.mean(np.linalg.norm(valid_pts - center, axis=1))
+            mean_center_dist_norm = float(min(mean_center_dist / (diag / 2.0), 1.0))
+            z_avg = 0.0
+        else:
+            mean_center_dist_norm = 1.0
+            z_avg = 0.0
+
+        return points_resized, in_view, mean_center_dist_norm, z_avg
+
+    def project_to_stitched_3d(xy):
+        cand = _select_best_camera_3d(np.array([xy], dtype=np.float32))
+        if cand is None:
+            return None
+        px_py, in_view, _, _ = cand
+        if in_view[0]:
+            return float(px_py[0, 0]), float(px_py[0, 1])
+        return None
+
+    project_to_stitched_3d._select_best_camera = _select_best_camera_3d
+
+    out_img = stitched_resized.copy()
+    if out_img.dtype != np.uint8:
+        out_img = out_img.astype(np.uint8)
+
+    return out_img, project_to_stitched_3d
+
+
+def draw_trajectories_and_save_3d(scene, fb, centers, token, k, total_proposals=None, min_start_dist=None, vis_params=None):
+    """
+    Prototype drawing function that uses the front camera and
+    `_transform_pcs_to_images` for projections. This builds a stitched
+    resized image and a 3D-based projector, then delegates actual drawing
+    to `draw_trajectories_and_save` so output format matches existing code.
+    """
+    out_img, project_fn = make_frontcam_projector(scene, fb)
+    if out_img is None or project_fn is None:
+        print(f"Unable to build front-camera projector for token={token}; skipping 3D draw")
+        return
+
+    # delegate to existing drawing helper so format and file-writing are identical
+    draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_proposals=total_proposals, min_start_dist=min_start_dist, vis_params=vis_params)
 
 #want to merge into draw_trajectories_and_save though, so we can save BEV images in the same dir as other images/txt files. Also, don't need a separate BEV traj.txt file if we already write it to the original txt file.
 def draw_bev_topk_and_save(centers, token, total_proposals: int, k: int, overlay_dir: Path = None):
@@ -516,7 +689,7 @@ def draw_bev_topk_and_save(centers, token, total_proposals: int, k: int, overlay
     bev_img = np.ones((bev_img_size, bev_img_size, 3), dtype=np.uint8) * 255
 
     if centers is None or centers.size == 0:
-        bev_path = overlay_dir / f"bev_topk_{k}_{token}.png"
+        bev_path = overlay_dir / f"bev_topk_{k}_{token}.jpg"
         cv2.imwrite(str(bev_path), bev_img)
         return
 
@@ -552,7 +725,7 @@ def draw_bev_topk_and_save(centers, token, total_proposals: int, k: int, overlay
     if (min_x <= 0 <= max_x) and (min_y <= 0 <= max_y):
         ego_px = to_pix(0.0, 0.0)
         cv2.circle(bev_img, ego_px, 5, (0, 0, 0), -1)
-    bev_path = overlay_dir / f"bev_topk_{k}_{token}.png"
+    bev_path = overlay_dir / f"bev_topk_{k}_{token}.jpg"
     cv2.imwrite(str(bev_path), bev_img)
     print(f'Wrote BEV overlay image to {bev_path}')
 
@@ -1408,10 +1581,10 @@ def main(cfg: DictConfig) -> None:
             k = centers.shape[0] if (centers is not None and centers.shape[0] > 0) else 0
 
             scene = scene_loader.get_scene_from_token(token)
-            out_img, project_fn = make_stitched_and_projector(scene, fb)
-            if out_img is None or project_fn is None:
-                print(f'Missing camera images for token {token}; cannot create stitched overlay')
-                continue
+            # out_img, project_fn = make_stitched_and_projector(scene, fb)
+            # if out_img is None or project_fn is None:
+            #     print(f'Missing camera images for token {token}; cannot create stitched overlay')
+            #     continue
 
             # compute per-trajectory start distances and optional visualization shifts
             try:
@@ -1455,7 +1628,9 @@ def main(cfg: DictConfig) -> None:
             }
 
             # save stitched image overlays and BEV visualization (BEV saved in same overlay dir)
-            draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_proposals=N, min_start_dist=min_start, vis_params=vis_params)
+            # draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_proposals=N, min_start_dist=min_start, vis_params=vis_params)
+            #prototype 3d projection function
+            draw_trajectories_and_save_3d(scene, fb, centers, token, k,total_proposals=N, min_start_dist=min_start, vis_params=vis_params)
             try:
                 # pass same overlay_dir used by draw_trajectories_and_save so files co-locate
                 out_dir = os.getenv('NAVSIM_EXP_ROOT')
