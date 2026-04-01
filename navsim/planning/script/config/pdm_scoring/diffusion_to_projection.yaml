@@ -67,6 +67,7 @@ debug:
     enable_single_pass_shift: true
     # Desired fraction of points in view in the stitched image (0.0-1.0).
     in_view_threshold: 0.65
+    min_length_proportion: 0.65
     # Step size (meters) for each additional shift when in_view < threshold.
     shift_step: 0.5
     # Optional logging of in-view counts before/after in output text.

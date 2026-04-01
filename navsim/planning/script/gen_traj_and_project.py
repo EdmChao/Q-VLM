@@ -331,7 +331,7 @@ def draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_pro
         ("cyan", (255, 255, 0)),
         ("purple", (128, 0, 128)),
         ("teal", (128, 128, 0)),
-        ("olive", (0, 128, 128)),
+        ("orange", (0, 165, 255)),
         ("steelblue", (192, 128, 64)),
     ]
 
@@ -345,6 +345,7 @@ def draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_pro
     in_view_threshold = float(vis_params.get('in_view_threshold', 0.65))
     shift_step = float(vis_params.get('shift_step', 0.5))
     max_shift_allowed = float(vis_params.get('max_shift', 20.0))
+    length_threshold = float(vis_params.get('min_length_proportion', 0.65))
     log_in_view_counts = bool(vis_params.get('log_in_view_counts', True))
 
     # will be written into output text after overlay drawing
@@ -361,7 +362,7 @@ def draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_pro
             # adaptive_shift operates on a set of trajectories and returns
             # shifted copies + diagnostics
             shifted, initial_in_views, final_in_views, applied_shifts = adaptive_shift(
-                centers[:k], project_fn, in_view_threshold, shift_step, max_shift_allowed
+                centers[:k], project_fn, in_view_threshold, shift_step, max_shift_allowed, length_threshold=length_threshold
             )
             # keep a copy of original centers and replace x,y for first k
             centers_to_draw = centers.copy()
@@ -712,7 +713,7 @@ def draw_bev_topk_and_save(centers, token, total_proposals: int, k: int, overlay
         py = int((max_y - y) * scale) + 10
         return px, py
    
-    color_map = [(0, 0, 255), (0, 255, 0), (255, 0, 0), (0, 255, 255), (255, 0, 255), (255, 255, 0), (128, 0, 128), (128, 128, 0), (0, 128, 128), (192, 128, 64)]
+    color_map = [(0, 0, 255), (0, 255, 0), (255, 0, 0), (0, 255, 255), (255, 0, 255), (255, 255, 0), (128, 0, 128), (128, 128, 0), (0, 165, 255), (192, 128, 64)]
     for i in range(centers.shape[0]):
         pts = []
         for t in range(centers.shape[1]):
@@ -728,6 +729,71 @@ def draw_bev_topk_and_save(centers, token, total_proposals: int, k: int, overlay
     bev_path = overlay_dir / f"bev_topk_{k}_{token}.jpg"
     cv2.imwrite(str(bev_path), bev_img)
     print(f'Wrote BEV overlay image to {bev_path}')
+
+
+def draw_default_trajectories_and_save(overlay_dir: Path, token: str, cam_w: int = 1152, cam_h: int = 384, H: int = 30):
+    """
+    Draw a set of default trajectories (dotted yellow) for testing and save
+    as a separate image in `overlay_dir`.
+
+    Default trajectories include:
+      - straight forward
+      - slightly curved left
+      - slightly curved right
+      - 90deg curved left
+      - 90deg curved right
+    """
+    overlay_dir.mkdir(parents=True, exist_ok=True)
+    img = np.ones((cam_h, cam_w, 3), dtype=np.uint8) * 255
+
+    # Build default ego-frame trajectories (meters)
+    t = np.linspace(0.0, 8.0, H)
+    trajs = []
+    # straight
+    trajs.append(np.stack([t, np.zeros_like(t)], axis=1))
+    # slight left
+    trajs.append(np.stack([t, -0.04 * (t ** 1.6)], axis=1))
+    # slight right
+    trajs.append(np.stack([t, 0.04 * (t ** 1.6)], axis=1))
+    # 90deg left (quarter circle)
+    R = 8.0
+    theta = np.linspace(0.0, np.pi / 2.0, H)
+    x_q = R * (1.0 - np.cos(theta))
+    y_q = -R * np.sin(theta)
+    trajs.append(np.stack([x_q, y_q], axis=1))
+    # 90deg right (mirror)
+    trajs.append(np.stack([x_q, -y_q], axis=1))
+
+    # Map ego coordinates to pixel coordinates similar to BEV mapping
+    all_xy = np.vstack(trajs)
+    min_x, min_y = np.min(all_xy[:, 0]), np.min(all_xy[:, 1])
+    max_x, max_y = np.max(all_xy[:, 0]), np.max(all_xy[:, 1])
+    pad = 1.0
+    min_x -= pad; min_y -= pad; max_x += pad; max_y += pad
+    span_x = max(max_x - min_x, 1e-3)
+    span_y = max(max_y - min_y, 1e-3)
+    scale = min((cam_w - 40) / span_x, (cam_h - 40) / span_y)
+
+    def to_pix(x, y):
+        px = int((x - min_x) * scale) + 20
+        py = int((max_y - y) * scale) + 20
+        return px, py
+
+    yellow = (0, 255, 255)
+    for traj in trajs:
+        pts = [to_pix(x, y) for x, y in traj]
+        # draw dotted line via small circles
+        for p in pts:
+            cv2.circle(img, p, 3, yellow, -1)
+
+    # mark ego origin
+    if (min_x <= 0 <= max_x) and (min_y <= 0 <= max_y):
+        ego_px = to_pix(0.0, 0.0)
+        cv2.circle(img, ego_px, 5, (0, 0, 0), -1)
+
+    out_path = overlay_dir / f"default_trajs_{token}.jpg"
+    cv2.imwrite(str(out_path), img)
+    print(f'Wrote default trajectories image to {out_path}')
 
 
 def compute_start_distances(centers: np.ndarray) -> np.ndarray:
@@ -747,7 +813,12 @@ def compute_start_distances(centers: np.ndarray) -> np.ndarray:
     return dists
 
 
-def adaptive_shift(centers: np.ndarray, project_fn, in_view_threshold: float, shift_step: float, max_shift_allowed: float):
+def adaptive_shift(centers: np.ndarray,
+                   project_fn,
+                   in_view_threshold: float,
+                   shift_step: float,
+                   max_shift_allowed: float,
+                   length_threshold: float = 0.5):
     """
     Adaptively shift trajectories straight forward (positive X) until the
     fraction of points projected in-view meets `in_view_threshold` or the
@@ -786,8 +857,17 @@ def adaptive_shift(centers: np.ndarray, project_fn, in_view_threshold: float, sh
         traj_xy = centers[i, :, :2].astype(np.float32, copy=False)
         applied = 0.0
 
+        # compute total trajectory displacement (start -> end) in meters
+        start_xy = traj_xy[0]
+        end_xy = traj_xy[-1]
+        traj_disp = float(np.linalg.norm(end_xy - start_xy))
+        if traj_disp <= 1e-8:
+            # avoid division by zero; treat as very short trajectory
+            traj_disp = 1e-8
+
         # prefer batch camera projection if available
         if hasattr(project_fn, '_select_best_camera'):
+            # initial candidate and diagnostics
             cand = project_fn._select_best_camera(traj_xy + applied * shift_dir)
             if cand is None:
                 initial_in[i] = 0
@@ -799,17 +879,40 @@ def adaptive_shift(centers: np.ndarray, project_fn, in_view_threshold: float, sh
             cur_in = int(np.sum(in_view))
             initial_in[i] = cur_in
 
-            # incrementally shift until target met or max reached
-            while (cur_in < target_count) and (applied < float(max_shift_allowed)):
+            # compute proportions
+            points_prop = float(cur_in) / float(H) if H > 0 else 0.0
+            if in_view.any():
+                idxs = np.where(in_view)[0]
+                first_idx = int(idxs[0])
+                last_idx = int(idxs[-1])
+                proj_disp = float(np.linalg.norm((traj_xy + applied * shift_dir)[last_idx] - (traj_xy + applied * shift_dir)[first_idx]))
+                length_prop = float(proj_disp) / float(traj_disp) if traj_disp > 0 else 1.0
+            else:
+                length_prop = 0.0
+
+            # incrementally shift until either points proportion OR length proportion
+            # meets its threshold, or until global max_shift_allowed reached
+            while (points_prop < float(in_view_threshold)) and (length_prop < float(length_threshold)) and (applied < float(max_shift_allowed)):
                 applied += float(shift_step)
                 if applied > float(max_shift_allowed):
                     applied = float(max_shift_allowed)
                 cand = project_fn._select_best_camera(traj_xy + applied * shift_dir)
                 if cand is None:
                     cur_in = 0
+                    points_prop = 0.0
+                    length_prop = 0.0
                     break
                 _, in_view, _, _ = cand
                 cur_in = int(np.sum(in_view))
+                points_prop = float(cur_in) / float(H) if H > 0 else 0.0
+                if in_view.any():
+                    idxs = np.where(in_view)[0]
+                    first_idx = int(idxs[0])
+                    last_idx = int(idxs[-1])
+                    proj_disp = float(np.linalg.norm((traj_xy + applied * shift_dir)[last_idx] - (traj_xy + applied * shift_dir)[first_idx]))
+                    length_prop = float(proj_disp) / float(traj_disp) if traj_disp > 0 else 1.0
+                else:
+                    length_prop = 0.0
 
             final_in[i] = cur_in
             applied_shifts[i] = float(applied)
@@ -832,12 +935,37 @@ def adaptive_shift(centers: np.ndarray, project_fn, in_view_threshold: float, sh
 
             cur_in = count_in_view(traj_xy)
             initial_in[i] = cur_in
-            while (cur_in < target_count) and (applied < float(max_shift_allowed)):
+            # For the fallback, also track projected-length proportion by checking
+            # which points have non-None projection and measuring first->last.
+            def count_and_length_prop(traj_pts, applied_shift):
+                idxs = []
+                for t in range(traj_pts.shape[0]):
+                    try:
+                        p = project_fn(tuple(traj_pts[t]))
+                    except Exception:
+                        p = None
+                    if p is not None:
+                        idxs.append(t)
+                cnt = len(idxs)
+                if cnt >= 2:
+                    first_idx = idxs[0]
+                    last_idx = idxs[-1]
+                    proj_disp = float(np.linalg.norm((traj_pts + applied_shift * shift_dir)[last_idx] - (traj_pts + applied_shift * shift_dir)[first_idx]))
+                    length_prop_local = float(proj_disp) / float(traj_disp) if traj_disp > 0 else 1.0
+                else:
+                    length_prop_local = 0.0
+                return cnt, length_prop_local
+
+            # initial proportions
+            points_prop = float(cur_in) / float(H) if H > 0 else 0.0
+            _, length_prop = count_and_length_prop(traj_xy, applied)
+            while (points_prop < float(in_view_threshold)) and (length_prop < float(length_threshold)) and (applied < float(max_shift_allowed)):
                 applied += float(shift_step)
                 if applied > float(max_shift_allowed):
                     applied = float(max_shift_allowed)
                 shifted_xy = traj_xy + applied * shift_dir
-                cur_in = count_in_view(shifted_xy)
+                cur_in, length_prop = count_and_length_prop(shifted_xy, applied)
+                points_prop = float(cur_in) / float(H) if H > 0 else 0.0
 
             final_in[i] = cur_in
             applied_shifts[i] = float(applied)
@@ -1600,6 +1728,7 @@ def main(cfg: DictConfig) -> None:
                     enable_single_pass = bool(getattr(vis_cfg, 'enable_single_pass_shift', False))
                     in_view_threshold = float(getattr(vis_cfg, 'in_view_threshold', 0.65))
                     shift_step = float(getattr(vis_cfg, 'shift_step', 0.5))
+                    min_length_prop = float(getattr(vis_cfg, 'min_length_proportion', 0.65))
                     log_in_view = bool(getattr(vis_cfg, 'log_in_view_counts', True))
                 except Exception:
                     desired_min = 8.0
@@ -1609,6 +1738,7 @@ def main(cfg: DictConfig) -> None:
                     in_view_threshold = 0.65
                     shift_step = 0.5
                     log_in_view = False
+                    min_length_prop = 0.65
                 # naive per-trajectory shifts removed; adaptive shifting can be
                 # implemented by the caller and passed via vis_params if needed.
             except Exception:
@@ -1625,6 +1755,7 @@ def main(cfg: DictConfig) -> None:
                 'shift_step': shift_step,
                 'max_shift': float(max_shift) if max_shift is not None else 20.0,
                 'log_in_view_counts': log_in_view,
+                'min_length_proportion': float(min_length_prop),
             }
 
             # save stitched image overlays and BEV visualization (BEV saved in same overlay dir)
@@ -1639,6 +1770,13 @@ def main(cfg: DictConfig) -> None:
                 else:
                     overlay_dir = Path(out_dir) / f"{k}_proposals"
                 draw_bev_topk_and_save(centers, token, total_proposals=N, k=k, overlay_dir=overlay_dir)
+                try:
+                    # save default hard-coded trajectories for testing
+                    cam_w = getattr(fb._config, 'camera_width', 1152)
+                    cam_h = getattr(fb._config, 'camera_height', 384)
+                    draw_default_trajectories_and_save(overlay_dir, token, cam_w=cam_w, cam_h=cam_h)
+                except Exception:
+                    print('Warning: failed to draw default trajectories image')
             except Exception:
                 print('Warning: failed to draw BEV topk visualization')
 
