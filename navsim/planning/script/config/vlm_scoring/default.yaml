@@ -1,0 +1,28 @@
+defaults:
+  - qwen3_vl_8b
+
+# Data paths
+data:
+  candidate_dirs:
+    - exp/10_proposals_ff
+  output_dir: exp/vlm_scores/
+
+# Processing parameters
+processing:
+  max_samples: null  # null = process all
+  checkpoint_every: 5
+  skip_existing: false
+
+# Model and device
+model:
+  model_id: "Qwen/Qwen3-VL-8B-Instruct"
+  device: "auto"
+
+# Evaluation criteria
+evaluation:
+  criteria:
+    - drivable_region
+    - lane_alignment
+    - collision_avoidance
+    - smooth_motion
+    - trajectory_plausibility

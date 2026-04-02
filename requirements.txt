@@ -49,3 +49,8 @@ timm
 einops
 imgaug
 fvcore
+
+# VLM trajectory scoring
+transformers
+accelerate
+qwen-vl-utils
