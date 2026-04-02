@@ -1,0 +1,25 @@
+model:
+  model_id: "Qwen/Qwen3-VL-8B-Instruct"
+  device: "auto"
+  max_new_tokens: 300
+  dtype: "auto"
+
+# Inference settings
+inference:
+  batch_size: 1  # Single-image processing
+  do_sample: false
+  temperature: 0.7
+  top_p: 0.9
+
+# Route instruction for autonomous driving context
+route_instruction: |
+  Drive safely and select the most reasonable forward trajectory
+  that stays in the proper drivable area, avoids collisions, and
+  follows lane geometry.
+
+# Output configuration
+output:
+  save_checkpoints: true
+  checkpoint_every: 5
+  include_raw_output: false
+  include_images: false
