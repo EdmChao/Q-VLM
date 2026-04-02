@@ -735,114 +735,57 @@ def draw_default_trajectories_and_save(overlay_dir: Path,
                                        token: str,
                                        scene=None,
                                        fb=None,
-                                       project_fn=None,
                                        cam_w: int = 1152,
                                        cam_h: int = 384,
-                                       H: int = 30):
+                                       H: int = 40):
     """
-    Draw a set of default trajectories (dotted yellow) for testing and save
-    as a separate image in `overlay_dir`.
+    Draw a set of default trajectories for testing and save as a separate image.
+    Uses draw_trajectories_and_save_3d if scene/fb are available.
 
-    Default trajectories include:
-      - straight forward
-      - slightly curved left
-      - slightly curved right
-      - 90deg curved left
-      - 90deg curved right
+    Default trajectories:
+      - forward: 0->40m, y=0m
+      - slight left: 0->38m, y~ -5m
+      - slight right: 0->38m, y~ +5m
+      - sharp left: 0->30m, y~ -25m
+      - sharp right: 0->30m, y~ +25m
     """
     overlay_dir.mkdir(parents=True, exist_ok=True)
 
-    # If a projector or scene+fb provided, use the stitched image as background
-    out_img = None
-    proj = project_fn
-    if proj is None and (scene is not None and fb is not None):
-        try:
-            stitched, proj = make_stitched_and_projector(scene, fb)
-            if stitched is not None:
-                out_img = stitched.copy()
-                cam_h, cam_w = out_img.shape[0], out_img.shape[1]
-        except Exception:
-            proj = None
+    t = np.linspace(0.0, 1.0, H)
+    forward = np.stack([40.0 * t, np.zeros_like(t)], axis=1)
+    slight_left = np.stack([38.0 * t, -5.0 * (t ** 2)], axis=1)
+    slight_right = np.stack([38.0 * t, 5.0 * (t ** 2)], axis=1)
+    sharp_vs = np.linspace(0.0, 1.0, H)
+    sharp_left = np.stack([30.0 * sharp_vs, -25.0 * (sharp_vs ** 3)], axis=1)
+    sharp_right = np.stack([30.0 * sharp_vs, 25.0 * (sharp_vs ** 3)], axis=1)
 
-    if out_img is None:
-        out_img = np.ones((cam_h, cam_w, 3), dtype=np.uint8) * 255
+    default_centers = np.stack([forward, slight_left, slight_right, sharp_left, sharp_right], axis=0).astype(np.float32)
 
-    # Build default ego-frame trajectories (meters)
-    t = np.linspace(0.0, 8.0, H)
-    trajs = []
-    # straight
-    trajs.append(np.stack([t, np.zeros_like(t)], axis=1))
-    # slight left (gentle curve)
-    trajs.append(np.stack([t, -0.04 * (t ** 1.6)], axis=1))
-    # slight right
-    trajs.append(np.stack([t, 0.04 * (t ** 1.6)], axis=1))
+    if scene is not None and fb is not None:
+        draw_trajectories_and_save_3d(
+            scene,
+            fb,
+            default_centers,
+            f"default_{token}",
+            k=default_centers.shape[0],
+            total_proposals=0,
+            min_start_dist=0.0,
+            vis_params={
+                'enable_single_pass_shift': False,
+                'in_view_threshold': 0.65,
+                'shift_step': 0.5,
+                'max_shift': 20.0,
+                'min_length_proportion': 0.65,
+                'log_in_view_counts': False,
+            },
+        )
+        return
 
-    # SHARP LEFT: forward, then quarter-circle left
-    N_straight = H // 3
-    N_curve = H - N_straight
-    straight_x = np.linspace(0.0, 4.0, N_straight)
-    straight_y = np.zeros(N_straight)
-    # quarter-circle left, start at (4,0), curve left (negative Y)
-    R = 4.0
-    theta = np.linspace(0, np.pi/2, N_curve)
-    x_curve = 4.0 + R * np.sin(theta)
-    y_curve = -R * (1 - np.cos(theta))
-    sharp_left_x = np.concatenate([straight_x, x_curve])
-    sharp_left_y = np.concatenate([straight_y, y_curve])
-    trajs.append(np.stack([sharp_left_x, sharp_left_y], axis=1))
-
-    # SHARP RIGHT: forward, then quarter-circle right
-    y_curve_r = R * (1 - np.cos(theta))
-    sharp_right_x = np.concatenate([straight_x, x_curve])
-    sharp_right_y = np.concatenate([straight_y, y_curve_r])
-    trajs.append(np.stack([sharp_right_x, sharp_right_y], axis=1))
-
-    # If we have a projector, project into the stitched image; otherwise render BEV-like mapping
-    yellow = (0, 255, 255)
-    if proj is not None:
-        # draw on out_img using project_fn. Skip points that don't project.
-        for traj in trajs:
-            for (x, y) in traj:
-                try:
-                    p = proj((float(x), float(y)))
-                except Exception:
-                    p = None
-                if p is not None:
-                    cx, cy = p
-                    cv2.circle(out_img, (int(round(cx)), int(round(cy))), 3, yellow, -1)
-        # mark ego origin if projectable
-        try:
-            p0 = proj((0.0, 0.0))
-            if p0 is not None:
-                cv2.circle(out_img, (int(round(p0[0])), int(round(p0[1]))), 5, (0, 0, 0), -1)
-        except Exception:
-            pass
-    else:
-        # BEV fallback rendering (same as before)
-        all_xy = np.vstack(trajs)
-        min_x, min_y = np.min(all_xy[:, 0]), np.min(all_xy[:, 1])
-        max_x, max_y = np.max(all_xy[:, 0]), np.max(all_xy[:, 1])
-        pad = 1.0
-        min_x -= pad; min_y -= pad; max_x += pad; max_y += pad
-        span_x = max(max_x - min_x, 1e-3)
-        span_y = max(max_y - min_y, 1e-3)
-        scale = min((cam_w - 40) / span_x, (cam_h - 40) / span_y)
-
-        def to_pix(x, y):
-            px = int((x - min_x) * scale) + 20
-            py = int((max_y - y) * scale) + 20
-            return px, py
-
-        for traj in trajs:
-            pts = [to_pix(x, y) for x, y in traj]
-            for p in pts:
-                cv2.circle(out_img, p, 3, yellow, -1)
-        if (min_x <= 0 <= max_x) and (min_y <= 0 <= max_y):
-            ego_px = to_pix(0.0, 0.0)
-            cv2.circle(out_img, ego_px, 5, (0, 0, 0), -1)
-
+    # fallback: save BEV-ish visualization if scene not provided
+    bev_img = np.ones((cam_h, cam_w, 3), dtype=np.uint8) * 255
+    # ... existing simple BEV or no-op, since main path should be aforementioned
     out_path = overlay_dir / f"default_trajs_{token}.jpg"
-    cv2.imwrite(str(out_path), out_img)
+    cv2.imwrite(str(out_path), bev_img)
     print(f'Wrote default trajectories image to {out_path}')
 
 
@@ -1826,8 +1769,8 @@ def main(cfg: DictConfig) -> None:
                     cam_h = getattr(fb._config, 'camera_height', 384)
                     # attempt to build stitched projector for accurate projection
                     try:
-                        stitched_img, proj_fn = make_stitched_and_projector(scene, fb)
-                        draw_default_trajectories_and_save(overlay_dir, token, scene=scene, fb=fb, project_fn=proj_fn, cam_w=cam_w, cam_h=cam_h)
+                        # stitched_img, proj_fn = make_stitched_and_projector(scene, fb)
+                        draw_default_trajectories_and_save(overlay_dir, token, scene=scene, fb=fb, cam_w=cam_w, cam_h=cam_h)
                     except Exception:
                         # fallback to BEV rendering if projector unavailable
                         draw_default_trajectories_and_save(overlay_dir, token, cam_w=cam_w, cam_h=cam_h)
