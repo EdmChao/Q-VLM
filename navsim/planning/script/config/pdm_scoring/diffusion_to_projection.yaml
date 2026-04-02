@@ -72,3 +72,5 @@ debug:
     shift_step: 0.5
     # Optional logging of in-view counts before/after in output text.
     log_in_view_counts: true
+    #display default fallback trajectories over k proposals
+    include_defaultl: true
