@@ -304,7 +304,7 @@ def make_stitched_and_projector(scene, fb):
     return out_img, project_to_stitched
 
 
-def draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_proposals=None, min_start_dist=None, vis_params=None):
+def draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_proposals=None, min_start_dist=None, vis_params=None, filename=None):
     """
     Draw multiple trajectories onto a stitched image and save overlay files.
 
@@ -455,7 +455,9 @@ def draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_pro
     else:
         overlay_dir = Path(out_dir) / f"{k}_proposals"
     overlay_dir.mkdir(parents=True, exist_ok=True)
-    out_img_path = overlay_dir / f"traj_overlay_{k}_{token}.jpg"
+
+    img_name = filename if (filename is not None) else f"traj_overlay_{k}_{token}.jpg"
+    out_img_path = overlay_dir / img_name
     cv2.imwrite(str(out_img_path), out_img)
     print(f'Wrote overlay image to {out_img_path}')
 
@@ -654,12 +656,15 @@ def make_frontcam_projector(scene, fb):
     return out_img, project_to_stitched_3d
 
 
-def draw_trajectories_and_save_3d(scene, fb, centers, token, k, total_proposals=None, min_start_dist=None, vis_params=None):
+def draw_trajectories_and_save_3d(scene, fb, centers, token, k, total_proposals=None, min_start_dist=None, vis_params=None, filename=None):
     """
     Prototype drawing function that uses the front camera and
     `_transform_pcs_to_images` for projections. This builds a stitched
     resized image and a 3D-based projector, then delegates actual drawing
     to `draw_trajectories_and_save` so output format matches existing code.
+
+    New param:
+      filename: optional output image filename (in overlay dir).
     """
     out_img, project_fn = make_frontcam_projector(scene, fb)
     if out_img is None or project_fn is None:
@@ -667,7 +672,17 @@ def draw_trajectories_and_save_3d(scene, fb, centers, token, k, total_proposals=
         return
 
     # delegate to existing drawing helper so format and file-writing are identical
-    draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_proposals=total_proposals, min_start_dist=min_start_dist, vis_params=vis_params)
+    draw_trajectories_and_save(
+        out_img,
+        project_fn,
+        centers,
+        token,
+        k,
+        total_proposals=total_proposals,
+        min_start_dist=min_start_dist,
+        vis_params=vis_params,
+        filename=filename,
+    )
 
 #want to merge into draw_trajectories_and_save though, so we can save BEV images in the same dir as other images/txt files. Also, don't need a separate BEV traj.txt file if we already write it to the original txt file.
 def draw_bev_topk_and_save(centers, token, total_proposals: int, k: int, overlay_dir: Path = None):
@@ -778,6 +793,7 @@ def draw_default_trajectories_and_save(overlay_dir: Path,
                 'min_length_proportion': 0.65,
                 'log_in_view_counts': False,
             },
+            filename=f"default_traj_overlay_{token}.jpg",
         )
         return
 
