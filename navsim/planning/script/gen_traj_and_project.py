@@ -725,7 +725,6 @@ def draw_bev_topk_and_save(centers, token, k: int, vis_params=None, filename=Non
     """
     Draw a simple top-down BEV image of the selected trajectories and save it alongside text info.
     - centers: (k, H, D) numpy array in ego coords (meters)
-    - total_proposals: total number of proposals before selection
     - k: number of selected proposals
     """
     if vis_params is None:
@@ -736,18 +735,33 @@ def draw_bev_topk_and_save(centers, token, k: int, vis_params=None, filename=Non
     bev_img_size = 512
     bev_img = np.ones((bev_img_size, bev_img_size, 3), dtype=np.uint8) * 255
 
-    if centers is None or centers.size == 0:
-        bev_path = overlay_dir / f"bev_topk_{k}_{token}.jpg"
-        cv2.imwrite(str(bev_path), bev_img)
-        return
+    if include_default:
+        default_centers = _get_default_trajectories(
+            centers.shape[1] if centers is not None and centers.size != 0 else 40
+        )
+        if centers is None or centers.size == 0:
+            centers = default_centers
+        else:
+            D = centers.shape[2]
+            if default_centers.shape[2] != D:
+                pad_width = D - 2
+                if pad_width > 0:
+                    pad = np.zeros((default_centers.shape[0], default_centers.shape[1], pad_width), dtype=default_centers.dtype)
+                    default_centers = np.concatenate([default_centers, pad], axis=2)
+            centers = np.concatenate([centers, default_centers], axis=0)
+        k = k + default_centers.shape[0]
 
-    # collect x,y points
-    all_xy = []
-    for i in range(centers.shape[0]):
-        for t in range(centers.shape[1]):
-            xy = centers[i, t][:2]
-            all_xy.append(xy)
-    all_xy = np.array(all_xy)
+    if centers is None or centers.size == 0:
+        all_xy = np.array([[0.0, 0.0]], dtype=np.float32)
+        centers = np.zeros((0, 1, 2), dtype=np.float32)
+    else:
+        all_xy = []
+        for i in range(centers.shape[0]):
+            for t in range(centers.shape[1]):
+                xy = centers[i, t][:2]
+                all_xy.append(xy)
+        all_xy = np.array(all_xy)
+
     min_x, min_y = np.min(all_xy[:, 0]), np.min(all_xy[:, 1])
     max_x, max_y = np.max(all_xy[:, 0]), np.max(all_xy[:, 1])
     pad = 1.0
