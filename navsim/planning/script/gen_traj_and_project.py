@@ -1777,13 +1777,7 @@ def main(cfg: DictConfig) -> None:
             #prototype 3d projection function
             draw_trajectories_and_save_3d(scene, fb, centers, token, k,total_proposals=N, min_start_dist=min_start, vis_params=vis_params)
             try:
-                # pass same overlay_dir used by draw_trajectories_and_save so files co-locate
-                out_dir = os.getenv('NAVSIM_EXP_ROOT')
-                if out_dir is None:
-                    overlay_dir = Path.cwd() / f"{k}_proposals"
-                else:
-                    overlay_dir = Path(out_dir) / f"{k}_proposals"
-                draw_bev_topk_and_save(centers, token, k=k, vis_params=vis_params, overlay_dir=overlay_dir)
+                draw_bev_topk_and_save(centers, token, k=k, vis_params=vis_params)
             except Exception:
                 print('Warning: failed to draw BEV topk visualization')
 
