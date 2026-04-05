@@ -42,7 +42,7 @@ simulator:
   proposal_sampling: ${proposal_sampling}
 
 #all to generate proposals for all data, one to generate for one example, int to generate int examples
-generate_count: 5
+generate_count: all
 
 #projection related stuff
 #determine how many exemplar trajectories to sample
