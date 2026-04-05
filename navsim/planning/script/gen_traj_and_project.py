@@ -721,21 +721,17 @@ def _get_default_trajectories(H):
     return np.stack([forward, slight_left, slight_right, sharp_left, sharp_right], axis=0).astype(np.float32)
 
 
-def draw_bev_topk_and_save(centers, token, total_proposals: int, k: int, overlay_dir: Path = None):
+def draw_bev_topk_and_save(centers, token, k: int, vis_params=None, filename=None):
     """
     Draw a simple top-down BEV image of the selected trajectories and save it alongside text info.
     - centers: (k, H, D) numpy array in ego coords (meters)
     - total_proposals: total number of proposals before selection
     - k: number of selected proposals
     """
-    # If caller provided an overlay_dir, use it so BEV image sits alongside other outputs.
-    if overlay_dir is None:
-        out_dir = os.getenv('NAVSIM_EXP_ROOT')
-        if out_dir is None:
-            overlay_dir = Path.cwd() / f"{k}_proposals_BEV"
-        else:
-            overlay_dir = Path(out_dir) / f"{k}_proposals_BEV"
-    overlay_dir.mkdir(parents=True, exist_ok=True)
+    if vis_params is None:
+        vis_params = {}
+
+    include_default = bool(vis_params.get('include_default', False))
 
     bev_img_size = 512
     bev_img = np.ones((bev_img_size, bev_img_size, 3), dtype=np.uint8) * 255
@@ -763,8 +759,8 @@ def draw_bev_topk_and_save(centers, token, total_proposals: int, k: int, overlay
         px = int((x - min_x) * scale) + 10
         py = int((max_y - y) * scale) + 10
         return px, py
-   
-    color_map = [(0, 0, 255), (0, 255, 0), (255, 0, 0), (0, 255, 255), (255, 0, 255), (255, 255, 0), (128, 0, 128), (128, 128, 0), (0, 165, 255), (192, 128, 64)]
+
+    color_map = [(0, 0, 255), (0, 255, 0), (255, 0, 0), (0, 255, 255), (255, 0, 255), (255, 255, 0), (128, 0, 128), (128, 128, 0), (0, 165, 255), (192, 128, 64), (147, 20, 255), (0, 215, 255), (208, 224, 64), (211, 85, 186), (255, 127, 0)]
     for i in range(centers.shape[0]):
         pts = []
         for t in range(centers.shape[1]):
@@ -777,67 +773,25 @@ def draw_bev_topk_and_save(centers, token, total_proposals: int, k: int, overlay
     if (min_x <= 0 <= max_x) and (min_y <= 0 <= max_y):
         ego_px = to_pix(0.0, 0.0)
         cv2.circle(bev_img, ego_px, 5, (0, 0, 0), -1)
-    bev_path = overlay_dir / f"bev_topk_{k}_{token}.jpg"
-    cv2.imwrite(str(bev_path), bev_img)
-    print(f'Wrote BEV overlay image to {bev_path}')
 
-
-def draw_default_trajectories_and_save(overlay_dir: Path,
-                                       token: str,
-                                       scene=None,
-                                       fb=None,
-                                       cam_w: int = 1152,
-                                       cam_h: int = 384,
-                                       H: int = 40):
-    """
-    Draw a set of default trajectories for testing and save as a separate image.
-    Uses draw_trajectories_and_save_3d if scene/fb are available.
-
-    Default trajectories:
-      - forward: 0->40m, y=0m
-      - slight left: 0->38m, y~ -5m
-      - slight right: 0->38m, y~ +5m
-      - sharp left: 0->30m, y~ -25m
-      - sharp right: 0->30m, y~ +25m
-    """
+    out_dir = os.getenv('NAVSIM_EXP_ROOT')
+    if out_dir is None:
+        overlay_dir = Path.cwd() / f"{k}_proposals"
+    else:
+        overlay_dir = Path(out_dir) / f"{k}_proposals"
     overlay_dir.mkdir(parents=True, exist_ok=True)
 
-    t = np.linspace(0.0, 1.0, H)
-    forward = np.stack([40.0 * t, np.zeros_like(t)], axis=1)
-    slight_left = np.stack([38.0 * t, -5.0 * (t ** 2)], axis=1)
-    slight_right = np.stack([38.0 * t, 5.0 * (t ** 2)], axis=1)
-    sharp_vs = np.linspace(0.0, 1.0, H)
-    sharp_left = np.stack([30.0 * sharp_vs, -25.0 * (sharp_vs ** 3)], axis=1)
-    sharp_right = np.stack([30.0 * sharp_vs, 25.0 * (sharp_vs ** 3)], axis=1)
+    if filename is None:
+        suffix = "_with_default" if include_default else ""
+        img_name = f"traj_overlay_{k}_{token}{suffix}.jpg"
+    else:
+        img_name = filename
 
-    default_centers = np.stack([forward, slight_left, slight_right, sharp_left, sharp_right], axis=0).astype(np.float32)
+    out_img_path = overlay_dir / img_name
+    cv2.imwrite(str(out_img_path), bev_img)
+    print(f'Wrote overlay image to {out_img_path}')
 
-    if scene is not None and fb is not None:
-        draw_trajectories_and_save_3d(
-            scene,
-            fb,
-            default_centers,
-            f"default_{token}",
-            k=default_centers.shape[0],
-            total_proposals=0,
-            min_start_dist=0.0,
-            vis_params={
-                'enable_single_pass_shift': False,
-                'in_view_threshold': 0.65,
-                'shift_step': 0.5,
-                'max_shift': 20.0,
-                'min_length_proportion': 0.65,
-                'log_in_view_counts': False,
-            },
-        )
-        return
 
-    # fallback: save BEV-ish visualization if scene not provided
-    bev_img = np.ones((cam_h, cam_w, 3), dtype=np.uint8) * 255
-    # ... existing simple BEV or no-op, since main path should be aforementioned
-    out_path = overlay_dir / f"default_trajs_{token}.jpg"
-    cv2.imwrite(str(out_path), bev_img)
-    print(f'Wrote default trajectories image to {out_path}')
 
 
 def compute_start_distances(centers: np.ndarray) -> np.ndarray:
@@ -1815,20 +1769,7 @@ def main(cfg: DictConfig) -> None:
                     overlay_dir = Path.cwd() / f"{k}_proposals"
                 else:
                     overlay_dir = Path(out_dir) / f"{k}_proposals"
-                draw_bev_topk_and_save(centers, token, total_proposals=N, k=k, overlay_dir=overlay_dir)
-                # try:
-                #     # save default hard-coded trajectories for testing and project them
-                #     cam_w = getattr(fb._config, 'camera_width', 1152)
-                #     cam_h = getattr(fb._config, 'camera_height', 384)
-                #     # attempt to build stitched projector for accurate projection
-                #     try:
-                #         # stitched_img, proj_fn = make_stitched_and_projector(scene, fb)
-                #         draw_default_trajectories_and_save(overlay_dir, token, scene=scene, fb=fb, cam_w=cam_w, cam_h=cam_h)
-                #     except Exception:
-                #         # fallback to BEV rendering if projector unavailable
-                #         draw_default_trajectories_and_save(overlay_dir, token, cam_w=cam_w, cam_h=cam_h)
-                # except Exception:
-                #     print('Warning: failed to draw default trajectories image')
+                draw_bev_topk_and_save(centers, token, k=k, vis_params=vis_params, overlay_dir=overlay_dir)
             except Exception:
                 print('Warning: failed to draw BEV topk visualization')
 
