@@ -797,7 +797,7 @@ def draw_bev_topk_and_save(centers, token, k: int, vis_params=None, filename=Non
 
     if filename is None:
         suffix = "_with_default" if include_default else ""
-        img_name = f"traj_overlay_{k}_{token}{suffix}.jpg"
+        img_name = f"traj_overlay_BEV_{k}_{token}{suffix}.jpg"
     else:
         img_name = filename
 
