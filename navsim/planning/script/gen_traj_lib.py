@@ -74,7 +74,7 @@ def sharp_turns(H: int = 40, variants: int = 6, forward: float = 30.0) -> np.nda
     return np.stack(out, axis=0)
 
 
-def u_turns(H: int = 40, variants_each_side: int = 2, radius: float = 8.0) -> np.ndarray:
+def u_turns(H: int = 40, variants_each_side: int = 2, radius: float = 4.0) -> np.ndarray:
     # Proper 180-degree U-turn arc: vehicle makes full reversal by turning in a circle
     # Starts heading forward (+x), becomes perpendicular at 90°, ends heading backward (-x)
     out = []
@@ -120,7 +120,7 @@ def slow_stop(H: int = 40) -> np.ndarray:
     out.append(_make_curve(H, 12.0, lambda t: 1.0 * (t ** 2.0)))
     return np.stack(out, axis=0)
 
-def emergency_evasive(H: int = 40, variants_each_side: int = 2, forward: float = 10.0, amplitude: float = 2.0) -> np.ndarray:
+def emergency_evasive(H: int = 40, variants_each_side: int = 2, forward: float = 14.0, amplitude: float = 3.0) -> np.ndarray:
     # # 2 evasive swerve maneuvers using smaller U-turn arcs
     # # Swerve left/right to avoid obstacle, then partially return
     # out = []
@@ -255,7 +255,7 @@ def draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_pro
         vis_params = {}
 
     # disable adaptive shifting for deterministic testing
-    enable_single_pass = False
+    enable_single_pass = True
     in_view_threshold = float(vis_params.get('in_view_threshold', 0.65))
     shift_step = float(vis_params.get('shift_step', 0.5))
     max_shift_allowed = float(vis_params.get('max_shift', 20.0))
@@ -287,22 +287,22 @@ def draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_pro
     initial_in_views = None
     final_in_views = None
     applied_shifts = None
-    # if enable_single_pass and centers is not None and centers.size != 0 and hasattr(project_fn, '_select_best_camera'):
-        # try:
+    if enable_single_pass and centers is not None and centers.size != 0 and hasattr(project_fn, '_select_best_camera'):
+        try:
             # adaptive_shift operates on a set of trajectories and returns
             # shifted copies + diagnostics
-            # shifted, initial_in_views, final_in_views, applied_shifts = adaptive_shift(
-            #     centers[:k], project_fn, in_view_threshold, shift_step, max_shift_allowed, length_threshold=length_threshold
-            # )
+            shifted, initial_in_views, final_in_views, applied_shifts = adaptive_shift(
+                centers[:k], project_fn, in_view_threshold, shift_step, max_shift_allowed, length_threshold=length_threshold
+            )
             # keep a copy of original centers and replace x,y for first k
-            # centers_to_draw = centers.copy()
-            # centers_to_draw[: shifted.shape[0], :, :2] = shifted[:, :, :2]
-            # if log_in_view_counts:
-                # for idx in range(shifted.shape[0]):
-                #     print(f"[adaptive_shift] traj={idx} shift_m={applied_shifts[idx]:.4f} in_view_before={int(initial_in_views[idx])} in_view_after={int(final_in_views[idx])}")
-        # except Exception:
-        #     print("Warning: adaptive_shift failed; proceeding without shifts")
-        #     centers_to_draw = centers
+            centers_to_draw = centers.copy()
+            centers_to_draw[: shifted.shape[0], :, :2] = shifted[:, :, :2]
+            if log_in_view_counts:
+                for idx in range(shifted.shape[0]):
+                    print(f"[adaptive_shift] traj={idx} shift_m={applied_shifts[idx]:.4f} in_view_before={int(initial_in_views[idx])} in_view_after={int(final_in_views[idx])}")
+        except Exception:
+            print("Warning: adaptive_shift failed; proceeding without shifts")
+            centers_to_draw = centers
 
     for i in range(k):
         # determine per-trajectory label and color
