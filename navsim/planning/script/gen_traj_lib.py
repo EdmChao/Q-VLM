@@ -355,9 +355,9 @@ def draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_pro
 
     out_dir = os.getenv('NAVSIM_EXP_ROOT')
     if out_dir is None:
-        overlay_dir = Path.cwd() / f"{k}_proposals"
+        overlay_dir = Path.cwd() / "library"
     else:
-        overlay_dir = Path(out_dir) / f"{k}_proposals"
+        overlay_dir = Path(out_dir) / "library"
     # separate categories into subdirectories to avoid filename collisions
     if category:
         # sanitize category name
@@ -691,9 +691,9 @@ def draw_bev_topk_and_save(centers, token, k: int, vis_params=None, filename=Non
 
     out_dir = os.getenv('NAVSIM_EXP_ROOT')
     if out_dir is None:
-        overlay_dir = Path.cwd() / f"{k}_proposals"
+        overlay_dir = Path.cwd() /"library"
     else:
-        overlay_dir = Path(out_dir) / f"{k}_proposals"
+        overlay_dir = Path(out_dir) / "library"
     if category:
         safe_cat = str(category).replace(' ', '_')
         overlay_dir = overlay_dir / safe_cat
