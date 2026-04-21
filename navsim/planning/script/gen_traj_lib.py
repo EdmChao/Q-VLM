@@ -350,6 +350,11 @@ def draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_pro
             coord_str = ";".join([f"{int(x)},{int(y)}" for (x, y) in pts])
         else:
             coord_str = ""
+        # Debug: report how many projected points were available for this trajectory
+        try:
+            print(f"[debug] traj={i} label={label_str} projected_points={len(pts)} H={HORIZON} in_view_before={in_view_before} in_view_after={in_view_after} applied_shift={applied_shift}")
+        except Exception:
+            pass
         polyline_strings.append(f"{label_str}: {coord_str}")
         per_traj_stats.append((applied_shift, in_view_before, in_view_after))
 
@@ -629,7 +634,8 @@ def draw_bev_topk_and_save(centers, token, k: int, vis_params=None, filename=Non
 
     if include_default:
         default_centers = _get_default_trajectories(
-            centers.shape[1] if centers is not None and centers.size != 0 else 40
+            # centers.shape[1] if centers is not None and centers.size != 0 else 40
+            40
         )
         if centers is None or centers.size == 0:
             centers = default_centers
@@ -1584,6 +1590,8 @@ def main(cfg: DictConfig) -> None:
 
             N, HORIZON, DIM = dp_np.shape
             print(f'Found {N} proposals for token {token}; selecting {cfg.k} exemplars')
+            # Debug: print HORIZON (number of points per trajectory)
+            print(f'[debug] HORIZON (points per trajectory) = {HORIZON}')
 
             k = int(cfg.k)
 
@@ -1604,6 +1612,7 @@ def main(cfg: DictConfig) -> None:
                     centers = np.concatenate(centers_parts, axis=0).astype(np.float32)
                     colors_array = np.array(colors_parts, dtype=np.int32)
                     labels_array = labels_parts
+                    print(f'[debug] centers concatenated shape = {centers.shape} (K,H,D)')
                 else:
                     centers = np.zeros((0, HORIZON, 2), dtype=np.float32)
                     colors_array = np.zeros((0, 3), dtype=np.int32)
@@ -1690,6 +1699,7 @@ def main(cfg: DictConfig) -> None:
                         centers_grp = centers_grp[:, :, :DIM]
 
                     k_grp = centers_grp.shape[0]
+                    print(f"[debug] group={grp_name} centers_grp.shape={centers_grp.shape}")
                     if k_grp == 0:
                         continue
 
