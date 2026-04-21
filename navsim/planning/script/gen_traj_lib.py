@@ -234,7 +234,9 @@ def draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_pro
     include_default = bool(vis_params.get('include_default', False))
     default_centers = None
     if include_default:
-        default_centers = _get_default_trajectories(HORIZON)
+        # default_centers = _get_default_trajectories(HORIZON)
+        #try hardcoding vector size
+        default_centers = _get_default_trajectories(40)
         D = centers.shape[2]
         if default_centers.shape[2] != D:
             # pad to match D if proposal dims > 2 (e.g., extra features)
