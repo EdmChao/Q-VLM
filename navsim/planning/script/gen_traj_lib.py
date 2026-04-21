@@ -1269,6 +1269,9 @@ def main(cfg: DictConfig) -> None:
     """
     try:
         # Setup scene loader for accessing scene data
+        agent = instantiate(cfg.agent)
+        agent.initialize()
+
         scene_filter_override = SceneFilter(
             num_history_frames=2,
             num_future_frames=1,
@@ -1279,7 +1282,7 @@ def main(cfg: DictConfig) -> None:
 
         # Use default sensor config that includes camera images for projection
         from navsim.common.dataclasses import SensorConfig
-        sensor_config = SensorConfig()
+        sensor_config = agent.get_sensor_config()
 
         scene_loader = SceneLoader(
             synthetic_sensor_path=Path(cfg.synthetic_sensor_path),
