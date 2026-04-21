@@ -1626,12 +1626,12 @@ def main(cfg: DictConfig) -> None:
                 labels_array = []
 
             # Ensure centers have same DIM as proposals: pad or truncate as needed
-            if centers.size != 0:
-                if centers.shape[2] < DIM:
-                    pad = np.zeros((centers.shape[0], HORIZON, DIM - centers.shape[2]), dtype=centers.dtype)
-                    centers = np.concatenate([centers, pad], axis=2)
-                elif centers.shape[2] > DIM:
-                    centers = centers[:, :, :DIM]
+            # if centers.size != 0:
+            #     if centers.shape[2] < DIM:
+            #         pad = np.zeros((centers.shape[0], HORIZON, DIM - centers.shape[2]), dtype=centers.dtype)
+            #         centers = np.concatenate([centers, pad], axis=2)
+            #     elif centers.shape[2] > DIM:
+            #         centers = centers[:, :, :DIM]
 
             k = centers.shape[0]
             print(f"Using {k} handcrafted trajectories for token {token}")
