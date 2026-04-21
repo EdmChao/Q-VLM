@@ -143,6 +143,7 @@ def get_color_groups() -> Dict[str, Tuple[int, int, int]]:
         'slow_stop': (128, 128, 128),    # gray
         'evasive': (0, 255, 255),        # yellow
         'creep': (208, 224, 64),         # turquoise
+        'default': (147, 20, 255),       # hotpink for default set
     }
 
 
@@ -162,12 +163,18 @@ def get_all_trajectories(H: int = 40) -> Dict[str, Tuple[np.ndarray, Tuple[int, 
     groups['slow_stop'] = (slow_stop(H), colors['slow_stop'])
     groups['evasive'] = (emergency_evasive(H), colors['evasive'])
     groups['creep'] = (creep_forward(H), colors['creep'])
+    # include a small default set of canonical trajectories
+    try:
+        default_set = _get_default_trajectories(H)
+    except Exception:
+        default_set = np.zeros((5, H, 2), dtype=np.float32)
+    groups['default'] = (default_set, colors.get('default', (147, 20, 255)))
     return groups
 
 
 
 
-def draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_proposals=None, min_start_dist=None, vis_params=None, filename=None):
+def draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_proposals=None, min_start_dist=None, vis_params=None, filename=None, colors=None, labels=None):
     """
     Draw multiple trajectories onto a stitched image and save overlay files.
 
@@ -184,24 +191,23 @@ def draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_pro
         token: scene token used for naming output files
         k: number of trajectories (K) present in `centers`
     """
-    # Map color names to BGR tuples for OpenCV
-    color_map = [
-        ("red", (0, 0, 255)),
-        ("green", (0, 255, 0)),
-        ("blue", (255, 0, 0)),
-        ("yellow", (0, 255, 255)),
-        ("magenta", (255, 0, 255)),
-        ("cyan", (255, 255, 0)),
-        ("purple", (128, 0, 128)),
-        ("teal", (128, 128, 0)),
-        ("orange", (0, 165, 255)),
-        ("steelblue", (192, 128, 64)),
-        # 5 new bright default trajectory colors:
-        ("hotpink", (147, 20, 255)),
-        ("gold", (0, 215, 255)),
-        ("turquoise", (208, 224, 64)),
-        ("violet", (211, 85, 186)),
-        ("azure", (255, 127, 0)),
+    # Fallback palette (BGR tuples) if per-trajectory colors not provided
+    palette = [
+        (0, 0, 255),
+        (0, 255, 0),
+        (255, 0, 0),
+        (0, 255, 255),
+        (255, 0, 255),
+        (255, 255, 0),
+        (128, 0, 128),
+        (128, 128, 0),
+        (0, 165, 255),
+        (192, 128, 64),
+        (147, 20, 255),
+        (0, 215, 255),
+        (208, 224, 64),
+        (211, 85, 186),
+        (255, 127, 0),
     ]
 
     polyline_strings = []
@@ -210,7 +216,8 @@ def draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_pro
     if vis_params is None:
         vis_params = {}
 
-    enable_single_pass = bool(vis_params.get('enable_single_pass_shift', False))
+    # disable adaptive shifting for deterministic testing
+    enable_single_pass = False
     in_view_threshold = float(vis_params.get('in_view_threshold', 0.65))
     shift_step = float(vis_params.get('shift_step', 0.5))
     max_shift_allowed = float(vis_params.get('max_shift', 20.0))
@@ -240,25 +247,37 @@ def draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_pro
     initial_in_views = None
     final_in_views = None
     applied_shifts = None
-    if enable_single_pass and centers is not None and centers.size != 0 and hasattr(project_fn, '_select_best_camera'):
-        try:
+    # if enable_single_pass and centers is not None and centers.size != 0 and hasattr(project_fn, '_select_best_camera'):
+        # try:
             # adaptive_shift operates on a set of trajectories and returns
             # shifted copies + diagnostics
-            shifted, initial_in_views, final_in_views, applied_shifts = adaptive_shift(
-                centers[:k], project_fn, in_view_threshold, shift_step, max_shift_allowed, length_threshold=length_threshold
-            )
+            # shifted, initial_in_views, final_in_views, applied_shifts = adaptive_shift(
+            #     centers[:k], project_fn, in_view_threshold, shift_step, max_shift_allowed, length_threshold=length_threshold
+            # )
             # keep a copy of original centers and replace x,y for first k
-            centers_to_draw = centers.copy()
-            centers_to_draw[: shifted.shape[0], :, :2] = shifted[:, :, :2]
-            if log_in_view_counts:
-                for idx in range(shifted.shape[0]):
-                    print(f"[adaptive_shift] traj={idx} shift_m={applied_shifts[idx]:.4f} in_view_before={int(initial_in_views[idx])} in_view_after={int(final_in_views[idx])}")
-        except Exception:
-            print("Warning: adaptive_shift failed; proceeding without shifts")
-            centers_to_draw = centers
+            # centers_to_draw = centers.copy()
+            # centers_to_draw[: shifted.shape[0], :, :2] = shifted[:, :, :2]
+            # if log_in_view_counts:
+                # for idx in range(shifted.shape[0]):
+                #     print(f"[adaptive_shift] traj={idx} shift_m={applied_shifts[idx]:.4f} in_view_before={int(initial_in_views[idx])} in_view_after={int(final_in_views[idx])}")
+        # except Exception:
+        #     print("Warning: adaptive_shift failed; proceeding without shifts")
+        #     centers_to_draw = centers
 
     for i in range(k):
-        color_str, color_bgr = color_map[i % len(color_map)]
+        # determine per-trajectory label and color
+        if labels is not None and i < len(labels):
+            label_str = labels[i]
+        else:
+            label_str = f"traj_{i}"
+
+        if colors is not None and i < len(colors):
+            try:
+                color_bgr = tuple(int(x) for x in colors[i])
+            except Exception:
+                color_bgr = palette[i % len(palette)]
+        else:
+            color_bgr = palette[i % len(palette)]
         in_view_before = 0
         in_view_after = 0
         pts = []
@@ -329,7 +348,7 @@ def draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_pro
             coord_str = ";".join([f"{int(x)},{int(y)}" for (x, y) in pts])
         else:
             coord_str = ""
-        polyline_strings.append(f"{color_str}: {coord_str}")
+        polyline_strings.append(f"{label_str}: {coord_str}")
         per_traj_stats.append((applied_shift, in_view_before, in_view_after))
 
     out_dir = os.getenv('NAVSIM_EXP_ROOT')
@@ -544,7 +563,7 @@ def make_frontcam_projector(scene, fb):
     return out_img, project_to_stitched_3d
 
 
-def draw_trajectories_and_save_3d(scene, fb, centers, token, k, total_proposals=None, min_start_dist=None, vis_params=None, filename=None):
+def draw_trajectories_and_save_3d(scene, fb, centers, token, k, total_proposals=None, min_start_dist=None, vis_params=None, filename=None, colors=None, labels=None):
     """
     Prototype drawing function that uses the front camera and
     `_transform_pcs_to_images` for projections. This builds a stitched
@@ -570,6 +589,8 @@ def draw_trajectories_and_save_3d(scene, fb, centers, token, k, total_proposals=
         min_start_dist=min_start_dist,
         vis_params=vis_params,
         filename=filename,
+        colors=colors,
+        labels=labels,
     )
 
 #want to merge into draw_trajectories_and_save though, so we can save BEV images in the same dir as other images/txt files. Also, don't need a separate BEV traj.txt file if we already write it to the original txt file.
@@ -584,7 +605,7 @@ def _get_default_trajectories(H):
     return np.stack([forward, slight_left, slight_right, sharp_left, sharp_right], axis=0).astype(np.float32)
 
 
-def draw_bev_topk_and_save(centers, token, k: int, vis_params=None, filename=None):
+def draw_bev_topk_and_save(centers, token, k: int, vis_params=None, filename=None, colors=None, labels=None):
     """
     Draw a simple top-down BEV image of the selected trajectories and save it alongside text info.
     - centers: (k, H, D) numpy array in ego coords (meters)
@@ -637,16 +658,25 @@ def draw_bev_topk_and_save(centers, token, k: int, vis_params=None, filename=Non
         py = int((max_y - y) * scale) + 10
         return px, py
 
-    color_map = [(0, 0, 255), (0, 255, 0), (255, 0, 0), (0, 255, 255), (255, 0, 255), (255, 255, 0), (128, 0, 128), (128, 128, 0), (0, 165, 255), (192, 128, 64), (147, 20, 255), (0, 215, 255), (208, 224, 64), (211, 85, 186), (255, 127, 0)]
+    palette = [(0, 0, 255), (0, 255, 0), (255, 0, 0), (0, 255, 255), (255, 0, 255), (255, 255, 0), (128, 0, 128), (128, 128, 0), (0, 165, 255), (192, 128, 64), (147, 20, 255), (0, 215, 255), (208, 224, 64), (211, 85, 186), (255, 127, 0)]
     for i in range(centers.shape[0]):
         pts = []
         for t in range(centers.shape[1]):
             x, y = centers[i, t][:2]
             pts.append(to_pix(x, y))
+        # choose color from provided colors or palette
+        if colors is not None and i < len(colors):
+            try:
+                col = tuple(int(x) for x in colors[i])
+            except Exception:
+                col = palette[i % len(palette)]
+        else:
+            col = palette[i % len(palette)]
+
         if len(pts) >= 2:
-            cv2.polylines(bev_img, [np.array(pts, dtype=np.int32)], False, color_map[i % len(color_map)], 2)
+            cv2.polylines(bev_img, [np.array(pts, dtype=np.int32)], False, col, 2)
         elif len(pts) == 1:
-            cv2.circle(bev_img, pts[0], 3, color_map[i % len(color_map)], -1)
+            cv2.circle(bev_img, pts[0], 3, col, -1)
     if (min_x <= 0 <= max_x) and (min_y <= 0 <= max_y):
         ego_px = to_pix(0.0, 0.0)
         cv2.circle(bev_img, ego_px, 5, (0, 0, 0), -1)
@@ -1550,14 +1580,28 @@ def main(cfg: DictConfig) -> None:
             # Build centers by concatenating all groups returned by get_all_trajectories.
             try:
                 groups = get_all_trajectories(HORIZON)
-                parts = [grp[0] for grp in groups.values() if isinstance(grp, tuple) and grp[0] is not None]
-                if parts:
-                    centers = np.concatenate(parts, axis=0).astype(np.float32)
+                centers_parts = []
+                colors_parts = []
+                labels_parts = []
+                for name, grp in groups.items():
+                    if isinstance(grp, tuple) and grp[0] is not None:
+                        arr, col = grp
+                        centers_parts.append(arr)
+                        labels_parts.extend([name] * arr.shape[0])
+                        colors_parts.extend([col] * arr.shape[0])
+                if centers_parts:
+                    centers = np.concatenate(centers_parts, axis=0).astype(np.float32)
+                    colors_array = np.array(colors_parts, dtype=np.int32)
+                    labels_array = labels_parts
                 else:
                     centers = np.zeros((0, HORIZON, 2), dtype=np.float32)
+                    colors_array = np.zeros((0, 3), dtype=np.int32)
+                    labels_array = []
             except Exception:
                 traceback.print_exc()
                 centers = np.zeros((0, HORIZON, 2), dtype=np.float32)
+                colors_array = np.zeros((0, 3), dtype=np.int32)
+                labels_array = []
 
             # Ensure centers have same DIM as proposals: pad or truncate as needed
             if centers.size != 0:
@@ -1621,9 +1665,9 @@ def main(cfg: DictConfig) -> None:
             # save stitched image overlays and BEV visualization (BEV saved in same overlay dir)
             # draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_proposals=N, min_start_dist=min_start, vis_params=vis_params)
             #prototype 3d projection function
-            draw_trajectories_and_save_3d(scene, fb, centers, token, k,total_proposals=N, min_start_dist=min_start, vis_params=vis_params)
+            draw_trajectories_and_save_3d(scene, fb, centers, token, k, total_proposals=N, min_start_dist=min_start, vis_params=vis_params, colors=colors_array, labels=labels_array)
             try:
-                draw_bev_topk_and_save(centers, token, k=k, vis_params=vis_params)
+                draw_bev_topk_and_save(centers, token, k=k, vis_params=vis_params, colors=colors_array, labels=labels_array)
             except Exception:
                 print('Warning: failed to draw BEV topk visualization')
 
