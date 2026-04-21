@@ -1710,11 +1710,11 @@ def main(cfg: DictConfig) -> None:
             # save stitched image overlays and BEV visualization (BEV saved in same overlay dir)
             # draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_proposals=N, min_start_dist=min_start, vis_params=vis_params)
             #prototype 3d projection function
-            draw_trajectories_and_save_3d(scene, fb, centers, token, k, total_proposals=N, min_start_dist=min_start, vis_params=vis_params, colors=colors_array, labels=labels_array, category='all')
-            try:
-                draw_bev_topk_and_save(centers, token, k=k, vis_params=vis_params, colors=colors_array, labels=labels_array, category='all')
-            except Exception:
-                print('Warning: failed to draw BEV topk visualization')
+            # draw_trajectories_and_save_3d(scene, fb, centers, token, k, total_proposals=N, min_start_dist=min_start, vis_params=vis_params, colors=colors_array, labels=labels_array, category='all')
+            # try:
+            #     draw_bev_topk_and_save(centers, token, k=k, vis_params=vis_params, colors=colors_array, labels=labels_array, category='all')
+            # except Exception:
+            #     print('Warning: failed to draw BEV topk visualization')
 
         
 
