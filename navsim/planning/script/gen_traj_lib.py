@@ -1262,24 +1262,13 @@ def collect_features_by_token(dataloader):
 
 @hydra.main(config_path=CONFIG_PATH, config_name=CONFIG_NAME, version_base=None)
 def main(cfg: DictConfig) -> None:
+    """
+    Clean pipeline to generate trajectory library with 40 points per trajectory,
+    calculate projection function using camera data, and project trajectories
+    onto stitched image and BEV.
+    """
     try:
-        # CUDA device visibility should be controlled via CLI override (--devices)
-        # or environment. Do not set from config by default so all devices remain visible.
-        # instantiate main agent (diffusion/DP) and separate GTRS scorer agent
-        agent = instantiate(cfg.agent)
-        agent.initialize()
-
-        scorer_agent = None
-        if cfg.get('scorer_agent'):
-            try:
-                scorer_agent = instantiate(cfg.scorer_agent)
-                # not all agents require initialize, but call if present
-                if hasattr(scorer_agent, 'initialize'):
-                    scorer_agent.initialize()
-            except Exception:
-                print('Warning: failed to instantiate or initialize scorer_agent')
-                traceback.print_exc()
-
+        # Setup scene loader for accessing scene data
         scene_filter_override = SceneFilter(
             num_history_frames=2,
             num_future_frames=1,
@@ -1288,317 +1277,58 @@ def main(cfg: DictConfig) -> None:
             include_synthetic_scenes=True,
         )
 
+        # Use default sensor config that includes camera images for projection
+        from navsim.common.dataclasses import SensorConfig
+        sensor_config = SensorConfig()
+
         scene_loader = SceneLoader(
             synthetic_sensor_path=Path(cfg.synthetic_sensor_path),
             original_sensor_path=Path(cfg.original_sensor_path),
             data_path=Path(cfg.navsim_log_path),
             synthetic_scenes_path=Path(cfg.synthetic_scenes_path),
             scene_filter=scene_filter_override,
-            sensor_config=agent.get_sensor_config(),
+            sensor_config=sensor_config,
         )
 
-        dataset = Dataset(
-            scene_loader=scene_loader,
-            feature_builders=agent.get_feature_builders(),
-            target_builders=agent.get_target_builders(),
-            cache_path=None,
-            force_cache_computation=False,
-            append_token_to_batch=True,
-            is_training=False,
-        )
-
-        if len(dataset) == 0:
-            raise SystemExit("Dataset empty - nothing to run")
-
-        # restrict to first item only for quick test (or use all, based on cfg.generate_count)
-        from torch.utils.data import Subset, DataLoader
-        fb = agent.get_feature_builders()[0]
-
-        subset = None
-        # resolve dataloader params from config
-        dl_cfg = None
-        if cfg.get('dataloader') and cfg.dataloader.get('params'):
-            dl_cfg = cfg.dataloader.params
-        batch_size = int(dl_cfg.get('batch_size', 1)) if dl_cfg is not None else 1
-        # Default to 4 workers unless explicitly set in config
-        num_workers = int(dl_cfg.get('num_workers', 4)) if dl_cfg is not None else 4
-        pin_memory = bool(dl_cfg.get('pin_memory', False)) if dl_cfg is not None else False
-
-        # Allow CLI override via environment set by startup parser (--workers N)
-        try:
-            override_workers = os.getenv('NAVSIM_OVERRIDE_WORKERS')
-            if override_workers is not None:
-                num_workers = int(override_workers)
-                print(f"Overriding dataloader num_workers with CLI --workers={num_workers}")
-        except Exception:
-            pass
-
+        # Collect all scene tokens
+        tokens_to_process = []
         gen_count = str(cfg.get('generate_count', 'one'))
-        # gen_count_lower = gen_count.lower()
-
+        
+        # Get all scene tokens from scene_loader
+        all_tokens = list(scene_loader.token_list)
+        
         if gen_count.isdigit():
             num = int(gen_count)
             num = max(1, num)
-            print(f"Extracting first {num} elements from dataset for testing!")
-            subset = Subset(dataset, list(range(min(num, len(dataset)))))
-            dataloader = DataLoader(subset, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=pin_memory)
-        elif gen_count == 'one':
-            print("Extracting first element from dataset for testing!")
-            subset = Subset(dataset, [0])
-            print(f"Using DataLoader batch_size={batch_size}, num_workers={num_workers}, pin_memory={pin_memory}")
-            dataloader = DataLoader(subset, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=pin_memory)
-            # dataloader = DataLoader(dataset, batch_size=1, num_workers=4, shuffle=False)
-        elif gen_count == 'all':
-            print("Processing all samples in dataset")
-            print(f"Using DataLoader batch_size={batch_size}, num_workers={num_workers}, pin_memory={pin_memory}")
-            dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=pin_memory)
-            # dataloader = DataLoader(dataset, batch_size=1, num_workers=4, shuffle=False)
-        else:
-            print(f"Unknown generate_count '{gen_count}'; defaulting to 'one'")
-            subset = Subset(dataset, [0])
-            print(f"Using DataLoader batch_size={batch_size}, num_workers={num_workers}, pin_memory={pin_memory}")
-            dataloader = DataLoader(subset, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=pin_memory)
-            # dataloader = DataLoader(dataset, batch_size=1, num_workers=4, shuffle=False)
-        
-        #check keys
-        # run in your script right after dataloader is created
-        for batch in dataloader:
-            print("batch type:", type(batch))
-            if isinstance(batch, dict):
-                for k,v in batch.items():
-                    print(k, "->", type(v), getattr(v, 'shape', None))
-            elif isinstance(batch, (list, tuple)):
-                print("batch is list/tuple length", len(batch))
-                first = batch[0] if len(batch)>0 else None
-                if isinstance(first, dict):
-                    for k,v in first.items():
-                        print("item[0].", k, "->", type(v), getattr(v, 'shape', None))
-            break
-
-        # Ensure trainer devices configuration is compatible with available hardware and dataset size.
-        trainer_params = dict(cfg.trainer.params) if cfg.get('trainer') else {}
-
-        # debug: will print resolved trainer params after resolving devices/strategy
-        try:
-            available_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
-        except Exception:
-            available_gpus = 0
-
-        try:
-            requested_devices = trainer_params.get('devices', None)
-            if requested_devices is None:
-                # default: use all GPUs if available else CPU (1)
-                devices_to_check = available_gpus if available_gpus > 0 else 1
-            elif isinstance(requested_devices, str) and requested_devices.lower() in ('auto', 'all'):
-                devices_to_check = available_gpus if available_gpus > 0 else 1
-            else:
-                devices_to_check = int(requested_devices)
-                if available_gpus > 0:
-                    devices_to_check = min(devices_to_check, available_gpus)
-                if devices_to_check <= 0:
-                    devices_to_check = 1
-            # record resolved device count back into trainer params so Trainer uses it
-            trainer_params['devices'] = devices_to_check
-        except Exception:
-            devices_to_check = 1
-            trainer_params['devices'] = 1
-
-        subset_len = len(subset) if subset is not None else len(dataset)
-        if (devices_to_check > 1) and (subset_len < devices_to_check):
-            # force single-device trainer to avoid distributed sampler errors
-            print(f"Dataset size ({subset_len}) < devices ({devices_to_check}); forcing devices=1 to avoid DDP sampler issues.")
-            trainer_params['devices'] = 1
-            trainer_params.pop('strategy', None)
-        # If resolved devices == 1, ensure no distributed strategy is used
-        if trainer_params.get('devices', 1) <= 1:
-            trainer_params.pop('strategy', None)
-
-        # create trainer and run prediction; guard against distributed failures
-        print("Resolved trainer_params:", trainer_params)
-        trainer = pl.Trainer(**trainer_params, callbacks=agent.get_training_callbacks())
-
-        try:
-            predictions = trainer.predict(AgentLightningModule(agent=agent, combined=False), dataloader, return_predictions=True)
-        except Exception:
-            # try to clean up distributed state if something went wrong
-            traceback.print_exc()
-            try:
-                if torch.distributed.is_initialized():
-                    try:
-                        torch.distributed.destroy_process_group()
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-            raise
-
-        # merge predictions as in test script
-        merged: Dict[str, Dict] = {}
-        for proc_prediction in predictions:
-            if isinstance(proc_prediction, dict):
-                merged.update(proc_prediction)
-            else:
-                for d in proc_prediction:
-                    if isinstance(d, dict):
-                        merged.update(d)
-
-        if len(merged) == 0:
-            print("No predictions produced")
-            return
-        
-        print("proposal predictions created")
-
-        # decide which tokens to process based on generate_count
-        # Build a separate Dataset/DataLoader for GTRS features (camera_feature/status_feature)
-        features_by_token = {}
-        # if scorer_agent is not None:
-        #     print("Building GTRS feature dataset and dataloader...")
-        #     try:
-        #         # Build a SceneLoader for the scorer agent using its expected sensor config.
-        #         # The main scene_loader above was created with the proposal agent's sensor config,
-        #         # which can differ from the scorer agent and lead to missing camera images.
-        #         try:
-        #             sc_cfg = scorer_agent.get_sensor_config()
-        #             print(f"Scorer agent sensor_config: {sc_cfg}")
-        #             print("Scorer SceneLoader paths:", {
-        #                 'synthetic_sensor_path': cfg.synthetic_sensor_path,
-        #                 'original_sensor_path': cfg.original_sensor_path,
-        #                 'navsim_log_path': cfg.navsim_log_path,
-        #                 'synthetic_scenes_path': cfg.synthetic_scenes_path,
-        #             })
-        #             scorer_scene_loader = SceneLoader(
-        #                 synthetic_sensor_path=Path(cfg.synthetic_sensor_path),
-        #                 original_sensor_path=Path(cfg.original_sensor_path),
-        #                 data_path=Path(cfg.navsim_log_path),
-        #                 synthetic_scenes_path=Path(cfg.synthetic_scenes_path),
-        #                 scene_filter=scene_filter_override,
-        #                 sensor_config=scorer_agent.get_sensor_config(),
-        #             )
-        #             print("Scorer SceneLoader created successfully using scorer_agent.get_sensor_config()")
-        #         except Exception as e:
-        #             # fallback to using the original scene_loader if scorer agent doesn't provide get_sensor_config
-        #             print("unable to load scorer_scene_loader, defaulting to scene_loader", e)
-        #             scorer_scene_loader = scene_loader
-
-        #         gtrs_dataset = Dataset(
-        #             scene_loader=scorer_scene_loader,
-        #             feature_builders=scorer_agent.get_feature_builders(),
-        #             target_builders=scorer_agent.get_target_builders(),
-        #             cache_path=None,
-        #             force_cache_computation=False,
-        #             append_token_to_batch=True,
-        #             is_training=False,
-        #         )
-
-        #         print("GTRS dataset length:", len(gtrs_dataset))
-        #         if len(gtrs_dataset) > 0:
-        #             # inspect first item to verify features are produced
-        #             try:
-        #                 sample = gtrs_dataset[0]
-        #                 if isinstance(sample, dict):
-        #                     print("gtrs_dataset[0] keys:", list(sample.keys()))
-        #                     for k, v in sample.items():
-        #                         print(f"  {k}: type={type(v)}, shape={getattr(v,'shape', None)}")
-        #                 else:
-        #                     print("gtrs_dataset[0] returned non-dict type:", type(sample))
-        #             except Exception:
-        #                 print("Failed to index gtrs_dataset[0]")
-
-        #         gtrs_dataloader = DataLoader(gtrs_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=pin_memory)
-        #         print("GTRS dataloader created:", {
-        #             'batch_size': batch_size,
-        #             'num_workers': num_workers,
-        #             'pin_memory': pin_memory,
-        #             'dataset_len': len(gtrs_dataset)
-        #         })
-        #         # Peek a single batch to inspect structure without disrupting iteration
-        #         try:
-        #             batch_peek = next(iter(gtrs_dataloader))
-        #             print("Peek GTRS batch type:", type(batch_peek))
-        #             if isinstance(batch_peek, dict):
-        #                 for k, v in batch_peek.items():
-        #                     print(f"  peek {k} -> {type(v)}, shape={getattr(v,'shape', None)}")
-        #             elif isinstance(batch_peek, (list, tuple)):
-        #                 print("  peek batch is list/tuple length", len(batch_peek))
-        #                 first = batch_peek[0] if len(batch_peek) > 0 else None
-        #                 if isinstance(first, dict):
-        #                     for k, v in first.items():
-        #                         print(f"    peek item[0].{k} -> {type(v)}, shape={getattr(v,'shape', None)}")
-        #         except Exception as e:
-        #             print("  Failed to peek gtrs_dataloader batch:", e)
-
-        #         print("Collecting features from GTRS dataloader...")
-        #         features_by_token = collect_features_by_token(gtrs_dataloader)
-        #         print(f"  Collected features for {len(features_by_token)} tokens")
-        #         if len(features_by_token) > 0:
-        #             sample_keys = list(features_by_token.keys())[:5]
-        #             print(f"  Sample tokens with features: {sample_keys}")
-        #     except Exception:
-        #         print('Warning: failed to build GTRS dataset/dataloader or collect features')
-        #         traceback.print_exc()
-        #         features_by_token = {}
-        # else:
-        #     print('No scorer_agent configured; skipping GTRS feature collection')
-
-        gen_count = str(cfg.get('generate_count', 'one'))
-        # allow numeric strings to request N examples
-        if gen_count.isdigit():
-            n = int(gen_count)
-            all_tokens = list(merged.keys())
-            tokens_to_process = all_tokens[:n]
+            print(f"Processing first {num} scenes for trajectory library generation")
+            tokens_to_process = all_tokens[:min(num, len(all_tokens))]
         elif gen_count.lower() == 'all':
-            tokens_to_process = list(merged.keys())
+            print(f"Processing all {len(all_tokens)} scenes")
+            tokens_to_process = all_tokens
         else:
-            tokens_to_process = [list(merged.keys())[0]]
+            print("Extracting first scene for testing")
+            tokens_to_process = all_tokens[:1]
 
-        # Filter tokens to those for which we collected GTRS features
-        if features_by_token:
-            prior_count = len(tokens_to_process)
-            available = set(features_by_token.keys())
-            tokens_to_process = [t for t in tokens_to_process if t in available]
-            removed = prior_count - len(tokens_to_process)
-            print(f"Filtered tokens_to_process by available GTRS features: kept {len(tokens_to_process)} / {prior_count} (removed {removed})")
-            if removed > 0:
-                missing = [t for t in tokens_to_process if t not in available]
-                print(f"  Note: some requested tokens had no features; sample missing tokens omitted from processing")
+        print(f"Will process {len(tokens_to_process)} scenes")
+
+        # Create minimal feature builder config for camera projections
+        # (contains only camera_width and camera_height needed by make_frontcam_projector)
+        class MinimalFBConfig:
+            camera_width = 2048
+            camera_height = 512
+        
+        class MinimalFB:
+            def __init__(self):
+                self._config = MinimalFBConfig()
+        
+        fb = MinimalFB()
 
         for token in tokens_to_process:
-            result = merged[token]
+            # Fixed trajectory horizon: 40 points per trajectory
+            HORIZON = 40
+            print(f"\nProcessing token {token} with HORIZON={HORIZON}")
 
-            # extract dp proposals (look for 'dp_pred')
-            dp_pred = None
-            if isinstance(result, dict):
-                dp_pred = result.get('dp_pred', None)
-                if dp_pred is None:
-                    # fallback: find first array-like
-                    for v in result.values():
-                        if hasattr(v, 'shape'):
-                            dp_pred = v
-                            break
-
-            if dp_pred is None:
-                print(f'No trajectory proposals found in prediction for token {token}')
-                continue
-
-            print(f"normalizing proposals for token {token}")
-
-            # convert to numpy and normalize shape to (N, H, D)
-            if hasattr(dp_pred, 'cpu'):
-                dp_np = dp_pred.cpu().numpy()
-            else:
-                dp_np = np.array(dp_pred)
-            if dp_np.ndim == 4:
-                dp_np = dp_np[0]
-
-            N, HORIZON, DIM = dp_np.shape
-            print(f'Found {N} proposals for token {token}; selecting {cfg.k} exemplars')
-            # Debug: print HORIZON (number of points per trajectory)
-            print(f'[debug] HORIZON (points per trajectory) = {HORIZON}')
-
-            k = int(cfg.k)
-
-            # Use handcrafted trajectory library instead of GTRS scoring.
-            # Build centers by concatenating all groups returned by get_all_trajectories.
+            # Step 1: Generate handcrafted trajectory library with 40-point horizon
             try:
                 groups = get_all_trajectories(HORIZON)
                 centers_parts = []
@@ -1614,7 +1344,7 @@ def main(cfg: DictConfig) -> None:
                     centers = np.concatenate(centers_parts, axis=0).astype(np.float32)
                     colors_array = np.array(colors_parts, dtype=np.int32)
                     labels_array = labels_parts
-                    print(f'[debug] centers concatenated shape = {centers.shape} (K,H,D)')
+                    print(f'Generated {centers.shape[0]} trajectories with shape {centers.shape}')
                 else:
                     centers = np.zeros((0, HORIZON, 2), dtype=np.float32)
                     colors_array = np.zeros((0, 3), dtype=np.int32)
@@ -1625,54 +1355,46 @@ def main(cfg: DictConfig) -> None:
                 colors_array = np.zeros((0, 3), dtype=np.int32)
                 labels_array = []
 
-            # Ensure centers have same DIM as proposals: pad or truncate as needed
-            # if centers.size != 0:
-            #     if centers.shape[2] < DIM:
-            #         pad = np.zeros((centers.shape[0], HORIZON, DIM - centers.shape[2]), dtype=centers.dtype)
-            #         centers = np.concatenate([centers, pad], axis=2)
-            #     elif centers.shape[2] > DIM:
-            #         centers = centers[:, :, :DIM]
-
             k = centers.shape[0]
-            print(f"Using {k} handcrafted trajectories for token {token}")
+            print(f"Using {k} handcrafted trajectories")
 
-            scene = scene_loader.get_scene_from_token(token)
+            # Step 2: Load scene and get camera data for projection
+            try:
+                scene = scene_loader.get_scene_from_token(token)
+                if scene is None:
+                    print(f"Warning: could not load scene for token {token}")
+                    continue
+            except Exception as e:
+                print(f"Warning: failed to load scene for token {token}: {e}")
+                continue
 
-            # compute per-trajectory start distances and optional visualization shifts
+            # Step 3: Compute start distances and visualization parameters
             try:
                 start_dists = compute_start_distances(centers)
                 min_start = float(np.min(start_dists)) if (start_dists.size > 0) else None
-                # resolve visualization params from cfg if available
-                try:
-                    vis_cfg = cfg.debug.visualization
-                    desired_min = float(getattr(vis_cfg, 'desired_min_dist', 8.0))
-                    shift_scale = float(getattr(vis_cfg, 'shift_scale', 1.0))
-                    max_shift = getattr(vis_cfg, 'max_shift', None)
-                    max_shift = None if max_shift is None else float(max_shift)
-                    enable_single_pass = bool(getattr(vis_cfg, 'enable_single_pass_shift', False))
-                    in_view_threshold = float(getattr(vis_cfg, 'in_view_threshold', 0.65))
-                    shift_step = float(getattr(vis_cfg, 'shift_step', 0.5))
-                    min_length_prop = float(getattr(vis_cfg, 'min_length_proportion', 0.65))
-                    log_in_view = bool(getattr(vis_cfg, 'log_in_view_counts', True))
-                    include_default = bool(getattr(vis_cfg, 'include_default', True))
-                except Exception:
-                    desired_min = 8.0
-                    shift_scale = 1.0
-                    max_shift = None
-                    enable_single_pass = False
-                    in_view_threshold = 0.65
-                    shift_step = 0.5
-                    log_in_view = False
-                    min_length_prop = 0.65
-                # naive per-trajectory shifts removed; adaptive shifting can be
-                # implemented by the caller and passed via vis_params if needed.
             except Exception:
                 start_dists = np.array([])
                 min_start = None
+
+            # Resolve visualization parameters from config
+            try:
+                vis_cfg = cfg.debug.visualization
+                enable_single_pass = bool(getattr(vis_cfg, 'enable_single_pass_shift', False))
+                in_view_threshold = float(getattr(vis_cfg, 'in_view_threshold', 0.65))
+                shift_step = float(getattr(vis_cfg, 'shift_step', 0.5))
+                max_shift = getattr(vis_cfg, 'max_shift', None)
+                max_shift = None if max_shift is None else float(max_shift)
+                log_in_view = bool(getattr(vis_cfg, 'log_in_view_counts', True))
+                min_length_prop = float(getattr(vis_cfg, 'min_length_proportion', 0.65))
+                include_default = bool(getattr(vis_cfg, 'include_default', True))
+            except Exception:
                 enable_single_pass = False
                 in_view_threshold = 0.65
                 shift_step = 0.5
+                max_shift = None
                 log_in_view = False
+                min_length_prop = 0.65
+                include_default = True
 
             vis_params = {
                 'enable_single_pass_shift': enable_single_pass,
@@ -1684,7 +1406,7 @@ def main(cfg: DictConfig) -> None:
                 'include_default': include_default
             }
 
-            # Emit per-category visualizations (one image per trajectory type)
+            # Step 4: Draw per-category visualizations (stitched image + BEV)
             try:
                 for grp_name, grp in groups.items():
                     if not isinstance(grp, tuple):
@@ -1692,41 +1414,40 @@ def main(cfg: DictConfig) -> None:
                     arr, col = grp
                     if arr is None or arr.size == 0:
                         continue
+                    
                     centers_grp = arr.astype(np.float32)
-                    # pad/truncate to DIM
-                    if centers_grp.shape[2] < DIM:
-                        pad = np.zeros((centers_grp.shape[0], HORIZON, DIM - centers_grp.shape[2]), dtype=centers_grp.dtype)
-                        centers_grp = np.concatenate([centers_grp, pad], axis=2)
-                    elif centers_grp.shape[2] > DIM:
-                        centers_grp = centers_grp[:, :, :DIM]
-
                     k_grp = centers_grp.shape[0]
-                    print(f"[debug] group={grp_name} centers_grp.shape={centers_grp.shape}")
+                    
                     if k_grp == 0:
                         continue
 
                     colors_grp = np.tile(np.array(col, dtype=np.int32)[None, :], (k_grp, 1))
                     labels_grp = [grp_name] * k_grp
 
+                    print(f"  Drawing {grp_name}: {k_grp} trajectories")
+                    
+                    # Project onto stitched camera image
                     try:
-                        draw_trajectories_and_save_3d(scene, fb, centers_grp, f"{token}_{grp_name}", k_grp, total_proposals=N, min_start_dist=None, vis_params=vis_params, colors=colors_grp, labels=labels_grp, category=grp_name)
-                    except Exception:
-                        print(f"Warning: failed to draw stitched images for group {grp_name}")
+                        draw_trajectories_and_save_3d(scene, fb, centers_grp, f"{token}_{grp_name}", k_grp, 
+                                                      total_proposals=None, min_start_dist=None, 
+                                                      vis_params=vis_params, colors=colors_grp, 
+                                                      labels=labels_grp, category=grp_name)
+                        print(f"    ✓ Stitched image saved")
+                    except Exception as e:
+                        print(f"    ✗ Failed to draw stitched image: {e}")
+                    
+                    # Project onto BEV
                     try:
-                        draw_bev_topk_and_save(centers_grp, f"{token}_{grp_name}", k=k_grp, vis_params=vis_params, colors=colors_grp, labels=labels_grp, category=grp_name)
-                    except Exception:
-                        print(f"Warning: failed to draw BEV for group {grp_name}")
+                        draw_bev_topk_and_save(centers_grp, f"{token}_{grp_name}", k=k_grp, 
+                                              vis_params=vis_params, colors=colors_grp, 
+                                              labels=labels_grp, category=grp_name)
+                        print(f"    ✓ BEV saved")
+                    except Exception as e:
+                        print(f"    ✗ Failed to draw BEV: {e}")
+                        
             except Exception:
+                print(f"Warning: error during visualization for {token}")
                 traceback.print_exc()
-
-            # save stitched image overlays and BEV visualization (BEV saved in same overlay dir)
-            # draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_proposals=N, min_start_dist=min_start, vis_params=vis_params)
-            #prototype 3d projection function
-            # draw_trajectories_and_save_3d(scene, fb, centers, token, k, total_proposals=N, min_start_dist=min_start, vis_params=vis_params, colors=colors_array, labels=labels_array, category='all')
-            # try:
-            #     draw_bev_topk_and_save(centers, token, k=k, vis_params=vis_params, colors=colors_array, labels=labels_array, category='all')
-            # except Exception:
-            #     print('Warning: failed to draw BEV topk visualization')
 
         
 
