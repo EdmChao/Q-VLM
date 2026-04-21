@@ -74,7 +74,7 @@ def sharp_turns(H: int = 40, variants: int = 5, forward: float = 30.0) -> np.nda
     return np.stack(out, axis=0)
 
 
-def u_turns(H: int = 40, variants_each_side: int = 2, radius: float = 8.0) -> np.ndarray:
+def u_turns(H: int = 40, variants_each_side: int = 2, radius: float = 2.0) -> np.ndarray:
     # Proper 180-degree U-turn arc: vehicle makes full reversal by turning in a circle
     # Starts heading forward (+x), becomes perpendicular at 90°, ends heading backward (-x)
     out = []
@@ -93,7 +93,7 @@ def u_turns(H: int = 40, variants_each_side: int = 2, radius: float = 8.0) -> np
     # Right turns: mirror of left turns
     for r in radii:
         x = r * np.sin(theta)  # starts at 0, goes right, returns to 0
-        y = r * (1.0 - np.cos(theta))  # starts at 0, goes forward+up
+        y = -r * (1.0 - np.cos(theta))  # starts at 0, goes forward+up
         out.append(np.stack([x, y], axis=1).astype(np.float32))
     
     return np.stack(out, axis=0)
@@ -120,30 +120,45 @@ def slow_stop(H: int = 40) -> np.ndarray:
     out.append(_make_curve(H, 12.0, lambda t: 1.0 * (t ** 2.0)))
     return np.stack(out, axis=0)
 
-
-def emergency_evasive(H: int = 40) -> np.ndarray:
-    # 2 evasive swerve maneuvers using smaller U-turn arcs
-    # Swerve left/right to avoid obstacle, then partially return
+def emergency_evasive(H: int = 40, variants_each_side: int = 2, forward: float = 28.0, amplitude: float = 10.0) -> np.ndarray:
+    # # 2 evasive swerve maneuvers using smaller U-turn arcs
+    # # Swerve left/right to avoid obstacle, then partially return
+    # out = []
+    # t = np.linspace(0.0, 1.0, H)
+    
+    # # Use smaller radius and forward progress than full U-turns
+    # radius = 4.0  # half the u_turn radius
+    # forward_scale = 16.0  # half the typical forward progress
+    
+    # # Swerve left: small left arc with forward progress
+    # theta = np.pi * t
+    # x_left = forward_scale * t - radius * np.sin(theta)  # forward + leftward arc
+    # y_left = radius * (1.0 - np.cos(theta))  # outward arc
+    # out.append(np.stack([x_left, y_left], axis=1).astype(np.float32))
+    
+    # # Swerve right: small right arc with forward progress
+    # x_right = forward_scale * t + radius * np.sin(theta)  # forward + rightward arc
+    # y_right = radius * (1.0 - np.cos(theta))  # outward arc
+    # out.append(np.stack([x_right, y_right], axis=1).astype(np.float32))
     out = []
     t = np.linspace(0.0, 1.0, H)
+    # x always increases (constant forward progress)
+    x_base = forward * t
     
-    # Use smaller radius and forward progress than full U-turns
-    radius = 4.0  # half the u_turn radius
-    forward_scale = 16.0  # half the typical forward progress
+    # Vary amplitude slightly for different turn radii
+    amplitudes = np.linspace(amplitude * 0.8, amplitude * 1.2, variants_each_side)
     
-    # Swerve left: small left arc with forward progress
-    theta = np.pi * t
-    x_left = forward_scale * t - radius * np.sin(theta)  # forward + leftward arc
-    y_left = radius * (1.0 - np.cos(theta))  # outward arc
-    out.append(np.stack([x_left, y_left], axis=1).astype(np.float32))
+    # Left turns: y curve goes positive (left) then back to center
+    for amp in amplitudes:
+        y = amp * np.sin(np.pi * t)  # bell curve: 0 -> max -> 0
+        out.append(np.stack([x_base, y], axis=1).astype(np.float32))
     
-    # Swerve right: small right arc with forward progress
-    x_right = forward_scale * t + radius * np.sin(theta)  # forward + rightward arc
-    y_right = radius * (1.0 - np.cos(theta))  # outward arc
-    out.append(np.stack([x_right, y_right], axis=1).astype(np.float32))
-    
+    # Right turns: y curve goes negative (right) then back to center  
+    for amp in amplitudes:
+        y = -amp * np.sin(np.pi * t)  # inverted bell curve: 0 -> -max -> 0
+        out.append(np.stack([x_base, y], axis=1).astype(np.float32))
     return np.stack(out, axis=0)
-
+    
 
 def creep_forward(H: int = 40) -> np.ndarray:
     out = []
