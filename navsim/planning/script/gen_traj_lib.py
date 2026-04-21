@@ -3,7 +3,7 @@ import os
 import pickle
 import traceback
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Tuple
 
 import hydra
 import sys
@@ -855,218 +855,218 @@ def adaptive_shift(centers: np.ndarray,
 # shifting will be implemented separately by the caller when desired.
 
 
-def score_and_select_trajectories_gtrs_dense(
-    dp_np: np.ndarray,
-    token: str,
-    gtrs_agent,
-    features: Dict[str, torch.Tensor],
-    k: int,
-) -> tuple:
-    """
-    Score trajectory proposals using GTRS-Dense neural network and select top-k by overall score.
+# def score_and_select_trajectories_gtrs_dense(
+#     dp_np: np.ndarray,
+#     token: str,
+#     gtrs_agent,
+#     features: Dict[str, torch.Tensor],
+#     k: int,
+# ) -> tuple:
+#     """
+#     Score trajectory proposals using GTRS-Dense neural network and select top-k by overall score.
     
-    Args:
-        dp_np: (N, H, D) numpy array of proposals in ego-frame (relative coordinates)
-        token: scene token for logging
-        gtrs_agent: GTRSAgent instance with evaluate_dp_proposals method
-        features: dict with 'camera_feature' and 'status_feature' tensors
-        k: number of top proposals to select
+#     Args:
+#         dp_np: (N, H, D) numpy array of proposals in ego-frame (relative coordinates)
+#         token: scene token for logging
+#         gtrs_agent: GTRSAgent instance with evaluate_dp_proposals method
+#         features: dict with 'camera_feature' and 'status_feature' tensors
+#         k: number of top proposals to select
     
-    Returns:
-        tuple of (centers, scores) where centers is (k_out, H, D) and scores is (k_out,)
-    """
+#     Returns:
+#         tuple of (centers, scores) where centers is (k_out, H, D) and scores is (k_out,)
+#     """
 
-    print(f"GTRS-Dense scoring {dp_np.shape[0]} proposals for token {token}")
+#     print(f"GTRS-Dense scoring {dp_np.shape[0]} proposals for token {token}")
 
-    N = dp_np.shape[0]
-    if N == 0:
-        print(f"  No proposals to score")
-        return np.empty((0, dp_np.shape[1], dp_np.shape[2])), np.array([])
+#     N = dp_np.shape[0]
+#     if N == 0:
+#         print(f"  No proposals to score")
+#         return np.empty((0, dp_np.shape[1], dp_np.shape[2])), np.array([])
 
-    # Convert numpy proposals to torch tensor (keep in ego-frame format)
-    dp_torch = torch.from_numpy(dp_np).float()  # (N, H, D)
+#     # Convert numpy proposals to torch tensor (keep in ego-frame format)
+#     dp_torch = torch.from_numpy(dp_np).float()  # (N, H, D)
     
-    # Reshape proposals to (1, N, H*D) - add batch dimension and flatten trajectory dims
-    N, H, D = dp_torch.shape
-    # Before flattening, ensure proposals match model vocab horizon if possible
-    try:
-        vocab = gtrs_agent.model._trajectory_head.vocab.data
-        _, V_H, V_D = vocab.shape
-        expected_flat = V_H * V_D
-        if (H != V_H) or (D != V_D):
-            print(f"  Warning: proposal horizon/dim ({H},{D}) != model vocab ({V_H},{V_D}), interpolating proposals to match model.")
-            # Interpolate each proposal to target horizon V_H
-            dp_np_interp = np.zeros((N, V_H, V_D), dtype=dp_np.dtype)
-            old_x = np.arange(H)
-            new_x = np.linspace(0, H - 1, V_H)
-            for i in range(N):
-                for dim_i in range(D):
-                    dp_np_interp[i, :, dim_i] = np.interp(new_x, old_x, dp_np[i, :, dim_i])
-            # If D < V_D, pad zeros for missing dims; if D > V_D, truncate
-            if D < V_D:
-                if V_D > D:
-                    pad = np.zeros((N, V_H, V_D - D), dtype=dp_np.dtype)
-                    dp_np_interp = np.concatenate([dp_np_interp, pad], axis=2)
-            elif D > V_D:
-                dp_np_interp = dp_np_interp[:, :, :V_D]
-            dp_np = dp_np_interp
-            N, H, D = dp_np.shape
-            dp_torch = torch.from_numpy(dp_np).float()
-            dp_torch = dp_torch.reshape(1, N, H * D)
-        else:
-            dp_torch = dp_torch.reshape(1, N, H * D)  # (1, N, H*D)
-    except Exception:
-        dp_torch = dp_torch.reshape(1, N, H * D)  # (1, N, H*D)
+#     # Reshape proposals to (1, N, H*D) - add batch dimension and flatten trajectory dims
+#     N, H, D = dp_torch.shape
+#     # Before flattening, ensure proposals match model vocab horizon if possible
+#     try:
+#         vocab = gtrs_agent.model._trajectory_head.vocab.data
+#         _, V_H, V_D = vocab.shape
+#         expected_flat = V_H * V_D
+#         if (H != V_H) or (D != V_D):
+#             print(f"  Warning: proposal horizon/dim ({H},{D}) != model vocab ({V_H},{V_D}), interpolating proposals to match model.")
+#             # Interpolate each proposal to target horizon V_H
+#             dp_np_interp = np.zeros((N, V_H, V_D), dtype=dp_np.dtype)
+#             old_x = np.arange(H)
+#             new_x = np.linspace(0, H - 1, V_H)
+#             for i in range(N):
+#                 for dim_i in range(D):
+#                     dp_np_interp[i, :, dim_i] = np.interp(new_x, old_x, dp_np[i, :, dim_i])
+#             # If D < V_D, pad zeros for missing dims; if D > V_D, truncate
+#             if D < V_D:
+#                 if V_D > D:
+#                     pad = np.zeros((N, V_H, V_D - D), dtype=dp_np.dtype)
+#                     dp_np_interp = np.concatenate([dp_np_interp, pad], axis=2)
+#             elif D > V_D:
+#                 dp_np_interp = dp_np_interp[:, :, :V_D]
+#             dp_np = dp_np_interp
+#             N, H, D = dp_np.shape
+#             dp_torch = torch.from_numpy(dp_np).float()
+#             dp_torch = dp_torch.reshape(1, N, H * D)
+#         else:
+#             dp_torch = dp_torch.reshape(1, N, H * D)  # (1, N, H*D)
+#     except Exception:
+#         dp_torch = dp_torch.reshape(1, N, H * D)  # (1, N, H*D)
 
-    # Call GTRS-Dense scorer
-    print(f"  Scoring {N} proposals with GTRS-Dense model")
-    try:
-        with torch.no_grad():
-            # Move features to same device as model
-            device = next(gtrs_agent.parameters()).device
+#     # Call GTRS-Dense scorer
+#     print(f"  Scoring {N} proposals with GTRS-Dense model")
+#     try:
+#         with torch.no_grad():
+#             # Move features to same device as model
+#             device = next(gtrs_agent.parameters()).device
 
-            # Helper to normalize/move features to target device while preserving
-            # the expected list/tensor structure used by HydraModel.
-            def _move_and_normalize(feat_dict, device):
-                out = {}
-                for kf, fv in feat_dict.items():
-                    # Camera features: may be list(history) or a single tensor/ndarray
-                    if kf.startswith('camera_feature'):
-                        if isinstance(fv, list):
-                            new_list = []
-                            for item in fv:
-                                if item is None:
-                                    new_list.append(None)
-                                    continue
-                                if isinstance(item, torch.Tensor):
-                                    t = item
-                                elif isinstance(item, np.ndarray):
-                                    t = torch.from_numpy(item)
-                                else:
-                                    try:
-                                        t = torch.tensor(item)
-                                    except Exception:
-                                        new_list.append(item)
-                                        continue
-                                if t.dim() == 3:
-                                    t = t.unsqueeze(0)
-                                new_list.append(t.to(device))
-                            out[kf] = new_list
-                        elif isinstance(fv, torch.Tensor):
-                            t = fv
-                            if t.dim() == 3:
-                                t = t.unsqueeze(0)
-                            out[kf] = t.to(device)
-                        elif isinstance(fv, np.ndarray):
-                            t = torch.from_numpy(fv)
-                            if t.dim() == 3:
-                                t = t.unsqueeze(0)
-                            out[kf] = t.to(device)
-                        else:
-                            out[kf] = fv
+#             # Helper to normalize/move features to target device while preserving
+#             # the expected list/tensor structure used by HydraModel.
+#             def _move_and_normalize(feat_dict, device):
+#                 out = {}
+#                 for kf, fv in feat_dict.items():
+#                     # Camera features: may be list(history) or a single tensor/ndarray
+#                     if kf.startswith('camera_feature'):
+#                         if isinstance(fv, list):
+#                             new_list = []
+#                             for item in fv:
+#                                 if item is None:
+#                                     new_list.append(None)
+#                                     continue
+#                                 if isinstance(item, torch.Tensor):
+#                                     t = item
+#                                 elif isinstance(item, np.ndarray):
+#                                     t = torch.from_numpy(item)
+#                                 else:
+#                                     try:
+#                                         t = torch.tensor(item)
+#                                     except Exception:
+#                                         new_list.append(item)
+#                                         continue
+#                                 if t.dim() == 3:
+#                                     t = t.unsqueeze(0)
+#                                 new_list.append(t.to(device))
+#                             out[kf] = new_list
+#                         elif isinstance(fv, torch.Tensor):
+#                             t = fv
+#                             if t.dim() == 3:
+#                                 t = t.unsqueeze(0)
+#                             out[kf] = t.to(device)
+#                         elif isinstance(fv, np.ndarray):
+#                             t = torch.from_numpy(fv)
+#                             if t.dim() == 3:
+#                                 t = t.unsqueeze(0)
+#                             out[kf] = t.to(device)
+#                         else:
+#                             out[kf] = fv
 
-                    # Status features: often a list where each element is a tensor/ndarray
-                    elif kf == 'status_feature' or kf.endswith('status_feature'):
-                        if isinstance(fv, list):
-                            new_list = []
-                            for item in fv:
-                                if item is None:
-                                    new_list.append(None)
-                                    continue
-                                if isinstance(item, torch.Tensor):
-                                    t = item
-                                elif isinstance(item, np.ndarray):
-                                    t = torch.from_numpy(item)
-                                else:
-                                    try:
-                                        t = torch.tensor(item)
-                                    except Exception:
-                                        new_list.append(item)
-                                        continue
-                                if t.dim() == 1:
-                                    t = t.unsqueeze(0)
-                                new_list.append(t.to(device))
-                            out[kf] = new_list
-                        elif isinstance(fv, torch.Tensor):
-                            t = fv
-                            if t.dim() == 1:
-                                t = t.unsqueeze(0)
-                            out[kf] = t.to(device)
-                        elif isinstance(fv, np.ndarray):
-                            t = torch.from_numpy(fv)
-                            if t.dim() == 1:
-                                t = t.unsqueeze(0)
-                            out[kf] = t.to(device)
-                        else:
-                            out[kf] = fv
+#                     # Status features: often a list where each element is a tensor/ndarray
+#                     elif kf == 'status_feature' or kf.endswith('status_feature'):
+#                         if isinstance(fv, list):
+#                             new_list = []
+#                             for item in fv:
+#                                 if item is None:
+#                                     new_list.append(None)
+#                                     continue
+#                                 if isinstance(item, torch.Tensor):
+#                                     t = item
+#                                 elif isinstance(item, np.ndarray):
+#                                     t = torch.from_numpy(item)
+#                                 else:
+#                                     try:
+#                                         t = torch.tensor(item)
+#                                     except Exception:
+#                                         new_list.append(item)
+#                                         continue
+#                                 if t.dim() == 1:
+#                                     t = t.unsqueeze(0)
+#                                 new_list.append(t.to(device))
+#                             out[kf] = new_list
+#                         elif isinstance(fv, torch.Tensor):
+#                             t = fv
+#                             if t.dim() == 1:
+#                                 t = t.unsqueeze(0)
+#                             out[kf] = t.to(device)
+#                         elif isinstance(fv, np.ndarray):
+#                             t = torch.from_numpy(fv)
+#                             if t.dim() == 1:
+#                                 t = t.unsqueeze(0)
+#                             out[kf] = t.to(device)
+#                         else:
+#                             out[kf] = fv
 
-                    # Generic: move tensors/ndarrays, leave other types unchanged
-                    else:
-                        if isinstance(fv, torch.Tensor):
-                            out[kf] = fv.to(device)
-                        elif isinstance(fv, np.ndarray):
-                            out[kf] = torch.from_numpy(fv).to(device)
-                        else:
-                            out[kf] = fv
-                return out
+#                     # Generic: move tensors/ndarrays, leave other types unchanged
+#                     else:
+#                         if isinstance(fv, torch.Tensor):
+#                             out[kf] = fv.to(device)
+#                         elif isinstance(fv, np.ndarray):
+#                             out[kf] = torch.from_numpy(fv).to(device)
+#                         else:
+#                             out[kf] = fv
+#                 return out
 
-            features_device = _move_and_normalize(features, device)
-            dp_torch = dp_torch.to(device)
+#             features_device = _move_and_normalize(features, device)
+#             dp_torch = dp_torch.to(device)
 
-            def _shape_str(x):
-                try:
-                    if isinstance(x, list):
-                        for item in reversed(x):
-                            if item is None:
-                                continue
-                            return str(getattr(item, 'shape', None))
-                        return 'list(all None)'
-                    return str(getattr(x, 'shape', None))
-                except Exception:
-                    return 'N/A'
+#             def _shape_str(x):
+#                 try:
+#                     if isinstance(x, list):
+#                         for item in reversed(x):
+#                             if item is None:
+#                                 continue
+#                             return str(getattr(item, 'shape', None))
+#                         return 'list(all None)'
+#                     return str(getattr(x, 'shape', None))
+#                 except Exception:
+#                     return 'N/A'
 
-            print(f"  features['camera_feature'] shape: {_shape_str(features_device.get('camera_feature'))}")
-            print(f"  features['status_feature'] shape: {_shape_str(features_device.get('status_feature'))}")
-            print(f"  dp_torch shape: {dp_torch.shape}")
+#             print(f"  features['camera_feature'] shape: {_shape_str(features_device.get('camera_feature'))}")
+#             print(f"  features['status_feature'] shape: {_shape_str(features_device.get('status_feature'))}")
+#             print(f"  dp_torch shape: {dp_torch.shape}")
 
-            # Call the GTRS scorer's evaluate_dp_proposals method
-            result = gtrs_agent.evaluate_dp_proposals(
-                features=features_device,
-                dp_proposals=dp_torch
-            )
-    except Exception as e:
-        print(f"  Error during GTRS scoring: {e}")
-        traceback.print_exc()
-        return np.empty((0, dp_np.shape[1], dp_np.shape[2])), np.array([])
+#             # Call the GTRS scorer's evaluate_dp_proposals method
+#             result = gtrs_agent.evaluate_dp_proposals(
+#                 features=features_device,
+#                 dp_proposals=dp_torch
+#             )
+#     except Exception as e:
+#         print(f"  Error during GTRS scoring: {e}")
+#         traceback.print_exc()
+#         return np.empty((0, dp_np.shape[1], dp_np.shape[2])), np.array([])
 
-    # Extract scores
-    if 'overall_log_scores' in result:
-        scores_arr = result['overall_log_scores'].cpu().numpy().flatten()
-    elif 'overall_scores' in result:
-        scores_arr = result['overall_scores'].cpu().numpy().flatten()
-    else:
-        print("  Warning: no overall_scores in result; using sum of sub-scores")
-        # Fallback: combine sub-scores manually
-        sub_scores = {}
-        for key in ['no_at_fault_collisions', 'drivable_area_compliance', 'ego_progress', 'lane_keeping']:
-            if key in result:
-                sub_scores[key] = result[key].cpu().numpy().flatten()
-        if sub_scores:
-            scores_arr = np.sum(list(sub_scores.values()), axis=0)
-        else:
-            scores_arr = np.ones(N)
+#     # Extract scores
+#     if 'overall_log_scores' in result:
+#         scores_arr = result['overall_log_scores'].cpu().numpy().flatten()
+#     elif 'overall_scores' in result:
+#         scores_arr = result['overall_scores'].cpu().numpy().flatten()
+#     else:
+#         print("  Warning: no overall_scores in result; using sum of sub-scores")
+#         # Fallback: combine sub-scores manually
+#         sub_scores = {}
+#         for key in ['no_at_fault_collisions', 'drivable_area_compliance', 'ego_progress', 'lane_keeping']:
+#             if key in result:
+#                 sub_scores[key] = result[key].cpu().numpy().flatten()
+#         if sub_scores:
+#             scores_arr = np.sum(list(sub_scores.values()), axis=0)
+#         else:
+#             scores_arr = np.ones(N)
 
-    # Select top-k by score
-    k_out = min(k, len(scores_arr))
-    top_k_indices = np.argsort(scores_arr)[-k_out:][::-1]  # descending
+#     # Select top-k by score
+#     k_out = min(k, len(scores_arr))
+#     top_k_indices = np.argsort(scores_arr)[-k_out:][::-1]  # descending
 
-    centers = dp_np[top_k_indices]  # Return in original ego-frame format
-    scores = scores_arr[top_k_indices]
+#     centers = dp_np[top_k_indices]  # Return in original ego-frame format
+#     scores = scores_arr[top_k_indices]
 
-    print(f"  Selected top {k_out} proposals by GTRS-Dense score")
-    print(f"  GTRS scores: {scores}")
+#     print(f"  Selected top {k_out} proposals by GTRS-Dense score")
+#     print(f"  GTRS scores: {scores}")
 
-    return centers, scores
+#     return centers, scores
 
 
 def collect_features_by_token(dataloader):
