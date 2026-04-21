@@ -1662,6 +1662,40 @@ def main(cfg: DictConfig) -> None:
                 'include_default': include_default
             }
 
+            # Emit per-category visualizations (one image per trajectory type)
+            try:
+                for grp_name, grp in groups.items():
+                    if not isinstance(grp, tuple):
+                        continue
+                    arr, col = grp
+                    if arr is None or arr.size == 0:
+                        continue
+                    centers_grp = arr.astype(np.float32)
+                    # pad/truncate to DIM
+                    if centers_grp.shape[2] < DIM:
+                        pad = np.zeros((centers_grp.shape[0], HORIZON, DIM - centers_grp.shape[2]), dtype=centers_grp.dtype)
+                        centers_grp = np.concatenate([centers_grp, pad], axis=2)
+                    elif centers_grp.shape[2] > DIM:
+                        centers_grp = centers_grp[:, :, :DIM]
+
+                    k_grp = centers_grp.shape[0]
+                    if k_grp == 0:
+                        continue
+
+                    colors_grp = np.tile(np.array(col, dtype=np.int32)[None, :], (k_grp, 1))
+                    labels_grp = [grp_name] * k_grp
+
+                    try:
+                        draw_trajectories_and_save_3d(scene, fb, centers_grp, f"{token}_{grp_name}", k_grp, total_proposals=N, min_start_dist=None, vis_params=vis_params, colors=colors_grp, labels=labels_grp)
+                    except Exception:
+                        print(f"Warning: failed to draw stitched images for group {grp_name}")
+                    try:
+                        draw_bev_topk_and_save(centers_grp, f"{token}_{grp_name}", k=k_grp, vis_params=vis_params, colors=colors_grp, labels=labels_grp)
+                    except Exception:
+                        print(f"Warning: failed to draw BEV for group {grp_name}")
+            except Exception:
+                traceback.print_exc()
+
             # save stitched image overlays and BEV visualization (BEV saved in same overlay dir)
             # draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_proposals=N, min_start_dist=min_start, vis_params=vis_params)
             #prototype 3d projection function
