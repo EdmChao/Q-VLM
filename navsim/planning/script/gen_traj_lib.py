@@ -74,33 +74,40 @@ def sharp_turns(H: int = 40, variants: int = 5, forward: float = 30.0) -> np.nda
     return np.stack(out, axis=0)
 
 
-def u_turns(H: int = 40, variants_each_side: int = 2, radius: float = 12.0) -> np.ndarray:
-    # Produce semicircular arcs that start at ego (0,0) and sweep left/right
-    # Each arc is a semicircle segment with center at (radius, 0) so the
-    # trajectory moves forward (positive X) while curving laterally.
+def u_turns(H: int = 40, variants_each_side: int = 2, forward: float = 28.0, amplitude: float = 16.0) -> np.ndarray:
+    # Produce M-shaped arcs: forward motion + lateral curve to apex + return to center
+    # This creates a true U-turn shape where vehicle moves forward while curving left/right,
+    # reaches an apex offset, then curves back toward centerline while still moving forward.
     out = []
-    thetas = np.linspace(0.0, np.pi, H)
-    # vary radii slightly to produce a family of U-turn shapes
-    radii = np.linspace(radius * 0.8, radius * 1.2, variants_each_side)
-    for r in radii:
-        x = r * (1.0 - np.cos(thetas))
-        y = -r * np.sin(thetas)
-        out.append(np.stack([x, y], axis=1).astype(np.float32))
-    for r in radii:
-        x = r * (1.0 - np.cos(thetas))
-        y = r * np.sin(thetas)
-        out.append(np.stack([x, y], axis=1).astype(np.float32))
+    t = np.linspace(0.0, 1.0, H)
+    # x always increases (constant forward progress)
+    x_base = forward * t
+    
+    # Vary amplitude slightly for different turn radii
+    amplitudes = np.linspace(amplitude * 0.8, amplitude * 1.2, variants_each_side)
+    
+    # Left turns: y curve goes positive (left) then back to center
+    for amp in amplitudes:
+        y = amp * np.sin(np.pi * t)  # bell curve: 0 -> max -> 0
+        out.append(np.stack([x_base, y], axis=1).astype(np.float32))
+    
+    # Right turns: y curve goes negative (right) then back to center  
+    for amp in amplitudes:
+        y = -amp * np.sin(np.pi * t)  # inverted bell curve: 0 -> -max -> 0
+        out.append(np.stack([x_base, y], axis=1).astype(np.float32))
+    
     return np.stack(out, axis=0)
 
 
 def lane_changes(H: int = 40, variants: int = 6, forward: float = 36.0) -> np.ndarray:
     out = []
-    # small lateral offsets over mid-horizon
-    lateral_vals = np.linspace(2.0, 6.0, variants // 2 + variants % 2)
+    # Lateral offsets with steeper curvature for better visibility on front camera
+    # Using higher exponent (2.0) creates more pronounced diagonal motion
+    lateral_vals = np.linspace(4.0, 8.0, variants // 2 + variants % 2)
     for lv in lateral_vals:
-        out.append(_make_curve(H, forward, lambda t, lv=lv: lv * (t ** 1.0)))
+        out.append(_make_curve(H, forward, lambda t, lv=lv: lv * (t ** 2.0)))
     for lv in lateral_vals[: variants // 2]:
-        out.append(_make_curve(H, forward, lambda t, lv=lv: -lv * (t ** 1.0)))
+        out.append(_make_curve(H, forward, lambda t, lv=lv: -lv * (t ** 2.0)))
     return np.stack(out, axis=0)
 
 
@@ -115,12 +122,30 @@ def slow_stop(H: int = 40) -> np.ndarray:
 
 
 def emergency_evasive(H: int = 40) -> np.ndarray:
+    # Simplified to 2 swerve maneuvers: sharp turn to avoid obstacle, then return to lane
+    # Each swerve is like a sideways S-curve
     out = []
-    # sharp quick lateral movements: S-shaped and single-step dodge
-    out.append(_make_curve(H, 30.0, lambda t: 12.0 * np.sin(4.0 * t) * (t ** 0.5)))
-    out.append(_make_curve(H, 30.0, lambda t:  -12.0 * np.sign(1.0 - 2.0*t) * (t ** 0.3)))
-    out.append(_make_curve(H, 30.0, lambda t: 10.0 * (np.tanh((t - 0.4) * 10.0))))
-    out.append(_make_curve(H, 30.0, lambda t: -10.0 * (np.tanh((t - 0.4) * 10.0))))
+    t = np.linspace(0.0, 1.0, H)
+    x_base = 32.0 * t  # forward motion
+    
+    # Swerve left then right: sharp left curve, then curve back right
+    # First 0.4 of trajectory: move left sharply
+    # Last 0.6 of trajectory: curve back right (return to lane)
+    y_left_return = np.where(
+        t <= 0.4,
+        14.0 * np.sin(np.pi * (t / 0.4)),  # left curve in first 40%
+        14.0 * np.cos(np.pi * ((t - 0.4) / 0.6)) - 14.0  # return right curve
+    )
+    out.append(np.stack([x_base, y_left_return], axis=1).astype(np.float32))
+    
+    # Swerve right then left: sharp right curve, then curve back left  
+    y_right_return = np.where(
+        t <= 0.4,
+        -14.0 * np.sin(np.pi * (t / 0.4)),  # right curve in first 40%
+        -14.0 * np.cos(np.pi * ((t - 0.4) / 0.6)) + 14.0  # return left curve
+    )
+    out.append(np.stack([x_base, y_right_return], axis=1).astype(np.float32))
+    
     return np.stack(out, axis=0)
 
 
