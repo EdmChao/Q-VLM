@@ -75,18 +75,20 @@ def sharp_turns(H: int = 40, variants: int = 5, forward: float = 30.0) -> np.nda
 
 
 def u_turns(H: int = 40, variants_each_side: int = 2, radius: float = 12.0) -> np.ndarray:
-    # Semi-circular U-turns approximated by parametric circle segment
+    # Produce semicircular arcs that start at ego (0,0) and sweep left/right
+    # Each arc is a semicircle segment with center at (radius, 0) so the
+    # trajectory moves forward (positive X) while curving laterally.
     out = []
-    theta = np.linspace(0.0, np.pi, H)
-    for s in range(variants_each_side):
-        # left U-turn: negative y
-        x = radius * (1.0 - np.cos(theta))
-        y = -radius * np.sin(theta)
+    thetas = np.linspace(0.0, np.pi, H)
+    # vary radii slightly to produce a family of U-turn shapes
+    radii = np.linspace(radius * 0.8, radius * 1.2, variants_each_side)
+    for r in radii:
+        x = r * (1.0 - np.cos(thetas))
+        y = -r * np.sin(thetas)
         out.append(np.stack([x, y], axis=1).astype(np.float32))
-    for s in range(variants_each_side):
-        # right U-turn: positive y
-        x = radius * (1.0 - np.cos(theta))
-        y = radius * np.sin(theta)
+    for r in radii:
+        x = r * (1.0 - np.cos(thetas))
+        y = r * np.sin(thetas)
         out.append(np.stack([x, y], axis=1).astype(np.float32))
     return np.stack(out, axis=0)
 
@@ -174,7 +176,7 @@ def get_all_trajectories(H: int = 40) -> Dict[str, Tuple[np.ndarray, Tuple[int, 
 
 
 
-def draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_proposals=None, min_start_dist=None, vis_params=None, filename=None, colors=None, labels=None):
+def draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_proposals=None, min_start_dist=None, vis_params=None, filename=None, colors=None, labels=None, category=None):
     """
     Draw multiple trajectories onto a stitched image and save overlay files.
 
@@ -356,6 +358,11 @@ def draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_pro
         overlay_dir = Path.cwd() / f"{k}_proposals"
     else:
         overlay_dir = Path(out_dir) / f"{k}_proposals"
+    # separate categories into subdirectories to avoid filename collisions
+    if category:
+        # sanitize category name
+        safe_cat = str(category).replace(' ', '_')
+        overlay_dir = overlay_dir / safe_cat
     overlay_dir.mkdir(parents=True, exist_ok=True)
 
     if filename is None:
@@ -563,7 +570,7 @@ def make_frontcam_projector(scene, fb):
     return out_img, project_to_stitched_3d
 
 
-def draw_trajectories_and_save_3d(scene, fb, centers, token, k, total_proposals=None, min_start_dist=None, vis_params=None, filename=None, colors=None, labels=None):
+def draw_trajectories_and_save_3d(scene, fb, centers, token, k, total_proposals=None, min_start_dist=None, vis_params=None, filename=None, colors=None, labels=None, category=None):
     """
     Prototype drawing function that uses the front camera and
     `_transform_pcs_to_images` for projections. This builds a stitched
@@ -591,6 +598,7 @@ def draw_trajectories_and_save_3d(scene, fb, centers, token, k, total_proposals=
         filename=filename,
         colors=colors,
         labels=labels,
+        category=category,
     )
 
 #want to merge into draw_trajectories_and_save though, so we can save BEV images in the same dir as other images/txt files. Also, don't need a separate BEV traj.txt file if we already write it to the original txt file.
@@ -605,7 +613,7 @@ def _get_default_trajectories(H):
     return np.stack([forward, slight_left, slight_right, sharp_left, sharp_right], axis=0).astype(np.float32)
 
 
-def draw_bev_topk_and_save(centers, token, k: int, vis_params=None, filename=None, colors=None, labels=None):
+def draw_bev_topk_and_save(centers, token, k: int, vis_params=None, filename=None, colors=None, labels=None, category=None):
     """
     Draw a simple top-down BEV image of the selected trajectories and save it alongside text info.
     - centers: (k, H, D) numpy array in ego coords (meters)
@@ -686,6 +694,9 @@ def draw_bev_topk_and_save(centers, token, k: int, vis_params=None, filename=Non
         overlay_dir = Path.cwd() / f"{k}_proposals"
     else:
         overlay_dir = Path(out_dir) / f"{k}_proposals"
+    if category:
+        safe_cat = str(category).replace(' ', '_')
+        overlay_dir = overlay_dir / safe_cat
     overlay_dir.mkdir(parents=True, exist_ok=True)
 
     if filename is None:
@@ -1686,11 +1697,11 @@ def main(cfg: DictConfig) -> None:
                     labels_grp = [grp_name] * k_grp
 
                     try:
-                        draw_trajectories_and_save_3d(scene, fb, centers_grp, f"{token}_{grp_name}", k_grp, total_proposals=N, min_start_dist=None, vis_params=vis_params, colors=colors_grp, labels=labels_grp)
+                        draw_trajectories_and_save_3d(scene, fb, centers_grp, f"{token}_{grp_name}", k_grp, total_proposals=N, min_start_dist=None, vis_params=vis_params, colors=colors_grp, labels=labels_grp, category=grp_name)
                     except Exception:
                         print(f"Warning: failed to draw stitched images for group {grp_name}")
                     try:
-                        draw_bev_topk_and_save(centers_grp, f"{token}_{grp_name}", k=k_grp, vis_params=vis_params, colors=colors_grp, labels=labels_grp)
+                        draw_bev_topk_and_save(centers_grp, f"{token}_{grp_name}", k=k_grp, vis_params=vis_params, colors=colors_grp, labels=labels_grp, category=grp_name)
                     except Exception:
                         print(f"Warning: failed to draw BEV for group {grp_name}")
             except Exception:
@@ -1699,9 +1710,9 @@ def main(cfg: DictConfig) -> None:
             # save stitched image overlays and BEV visualization (BEV saved in same overlay dir)
             # draw_trajectories_and_save(out_img, project_fn, centers, token, k, total_proposals=N, min_start_dist=min_start, vis_params=vis_params)
             #prototype 3d projection function
-            draw_trajectories_and_save_3d(scene, fb, centers, token, k, total_proposals=N, min_start_dist=min_start, vis_params=vis_params, colors=colors_array, labels=labels_array)
+            draw_trajectories_and_save_3d(scene, fb, centers, token, k, total_proposals=N, min_start_dist=min_start, vis_params=vis_params, colors=colors_array, labels=labels_array, category='all')
             try:
-                draw_bev_topk_and_save(centers, token, k=k, vis_params=vis_params, colors=colors_array, labels=labels_array)
+                draw_bev_topk_and_save(centers, token, k=k, vis_params=vis_params, colors=colors_array, labels=labels_array, category='all')
             except Exception:
                 print('Warning: failed to draw BEV topk visualization')
 
