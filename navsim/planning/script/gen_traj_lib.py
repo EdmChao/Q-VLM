@@ -43,7 +43,7 @@ def straight_variants(H: int = 40) -> np.ndarray:
     return np.stack([_make_curve(H, 40.0, lambda t: np.zeros_like(t))], axis=0)
 
 
-def slight_turns(H: int = 40, variants: int = 5, forward: float = 38.0) -> np.ndarray:
+def slight_turns(H: int = 40, variants: int = 6, forward: float = 38.0) -> np.ndarray:
     # Generate small curvature left/right variations
     out = []
     mags = np.linspace(1.5, 6.0, variants // 2 + variants % 2)
@@ -54,7 +54,7 @@ def slight_turns(H: int = 40, variants: int = 5, forward: float = 38.0) -> np.nd
     return np.stack(out, axis=0)
 
 
-def moderate_turns(H: int = 40, variants: int = 5, forward: float = 36.0) -> np.ndarray:
+def moderate_turns(H: int = 40, variants: int = 6, forward: float = 36.0) -> np.ndarray:
     out = []
     mags = np.linspace(6.0, 14.0, variants // 2 + variants % 2)
     for m in mags:
@@ -64,7 +64,7 @@ def moderate_turns(H: int = 40, variants: int = 5, forward: float = 36.0) -> np.
     return np.stack(out, axis=0)
 
 
-def sharp_turns(H: int = 40, variants: int = 5, forward: float = 30.0) -> np.ndarray:
+def sharp_turns(H: int = 40, variants: int = 6, forward: float = 30.0) -> np.ndarray:
     out = []
     mags = np.linspace(14.0, 30.0, variants // 2 + variants % 2)
     for m in mags:
@@ -74,7 +74,7 @@ def sharp_turns(H: int = 40, variants: int = 5, forward: float = 30.0) -> np.nda
     return np.stack(out, axis=0)
 
 
-def u_turns(H: int = 40, variants_each_side: int = 2, radius: float = 2.0) -> np.ndarray:
+def u_turns(H: int = 40, variants_each_side: int = 2, radius: float = 8.0) -> np.ndarray:
     # Proper 180-degree U-turn arc: vehicle makes full reversal by turning in a circle
     # Starts heading forward (+x), becomes perpendicular at 90°, ends heading backward (-x)
     out = []
@@ -87,7 +87,7 @@ def u_turns(H: int = 40, variants_each_side: int = 2, radius: float = 2.0) -> np
     # Left turns: uses circular arc centered at (0, r)
     for r in radii:
         x = -r * np.sin(theta)  # starts at 0, goes left, returns to 0
-        y = r * (1.0 - np.cos(theta))  # starts at 0, goes forward+up
+        y = -r * (1.0 - np.cos(theta))  # starts at 0, goes forward+up
         out.append(np.stack([x, y], axis=1).astype(np.float32))
     
     # Right turns: mirror of left turns
@@ -120,7 +120,7 @@ def slow_stop(H: int = 40) -> np.ndarray:
     out.append(_make_curve(H, 12.0, lambda t: 1.0 * (t ** 2.0)))
     return np.stack(out, axis=0)
 
-def emergency_evasive(H: int = 40, variants_each_side: int = 2, forward: float = 28.0, amplitude: float = 10.0) -> np.ndarray:
+def emergency_evasive(H: int = 40, variants_each_side: int = 2, forward: float = 20.0, amplitude: float = 6.0) -> np.ndarray:
     # # 2 evasive swerve maneuvers using smaller U-turn arcs
     # # Swerve left/right to avoid obstacle, then partially return
     # out = []
