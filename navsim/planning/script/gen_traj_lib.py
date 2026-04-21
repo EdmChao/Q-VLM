@@ -86,8 +86,8 @@ def u_turns(H: int = 40, variants_each_side: int = 2, radius: float = 8.0) -> np
     
     # Left turns: uses circular arc centered at (0, r)
     for r in radii:
-        x = -r * np.sin(theta)  # starts at 0, goes left, returns to 0
-        y = -r * (1.0 - np.cos(theta))  # starts at 0, goes forward+up
+        x = r * np.sin(theta)  # starts at 0, goes left, returns to 0
+        y = r * (1.0 - np.cos(theta))  # starts at 0, goes forward+up
         out.append(np.stack([x, y], axis=1).astype(np.float32))
     
     # Right turns: mirror of left turns
@@ -120,7 +120,7 @@ def slow_stop(H: int = 40) -> np.ndarray:
     out.append(_make_curve(H, 12.0, lambda t: 1.0 * (t ** 2.0)))
     return np.stack(out, axis=0)
 
-def emergency_evasive(H: int = 40, variants_each_side: int = 2, forward: float = 20.0, amplitude: float = 6.0) -> np.ndarray:
+def emergency_evasive(H: int = 40, variants_each_side: int = 2, forward: float = 10.0, amplitude: float = 2.0) -> np.ndarray:
     # # 2 evasive swerve maneuvers using smaller U-turn arcs
     # # Swerve left/right to avoid obstacle, then partially return
     # out = []

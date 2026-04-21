@@ -73,4 +73,4 @@ debug:
     # Optional logging of in-view counts before/after in output text.
     log_in_view_counts: true
     #display default fallback trajectories over k proposals
-    include_default: false
+    include_default: true
