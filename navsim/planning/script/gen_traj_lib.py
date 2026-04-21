@@ -1268,9 +1268,11 @@ def main(cfg: DictConfig) -> None:
     onto stitched image and BEV.
     """
     try:
-        # Setup scene loader for accessing scene data
+        # Minimal agent initialization: only needed for sensor config and builders
         agent = instantiate(cfg.agent)
         agent.initialize()
+        
+        print("Agent initialized for sensor config and feature/target builders")
 
         scene_filter_override = SceneFilter(
             num_history_frames=2,
@@ -1280,42 +1282,106 @@ def main(cfg: DictConfig) -> None:
             include_synthetic_scenes=True,
         )
 
-        # Use default sensor config that includes camera images for projection
-        from navsim.common.dataclasses import SensorConfig
-        sensor_config = agent.get_sensor_config()
-
         scene_loader = SceneLoader(
             synthetic_sensor_path=Path(cfg.synthetic_sensor_path),
             original_sensor_path=Path(cfg.original_sensor_path),
             data_path=Path(cfg.navsim_log_path),
             synthetic_scenes_path=Path(cfg.synthetic_scenes_path),
             scene_filter=scene_filter_override,
-            sensor_config=sensor_config,
+            sensor_config=agent.get_sensor_config(),
         )
 
-        # Collect all scene tokens
-        tokens_to_process = []
+        # Create dataset with append_token_to_batch=True to get tokens from dataloader
+        dataset = Dataset(
+            scene_loader=scene_loader,
+            feature_builders=agent.get_feature_builders(),
+            target_builders=agent.get_target_builders(),
+            cache_path=None,
+            force_cache_computation=False,
+            append_token_to_batch=True,
+            is_training=False,
+        )
+
+        if len(dataset) == 0:
+            raise SystemExit("Dataset empty - nothing to run")
+
+        # Setup dataloader parameters
+        from torch.utils.data import Subset, DataLoader
+        fb = agent.get_feature_builders()[0]
+
+        dl_cfg = None
+        if cfg.get('dataloader') and cfg.dataloader.get('params'):
+            dl_cfg = cfg.dataloader.params
+        batch_size = int(dl_cfg.get('batch_size', 1)) if dl_cfg is not None else 1
+        num_workers = int(dl_cfg.get('num_workers', 4)) if dl_cfg is not None else 4
+        pin_memory = bool(dl_cfg.get('pin_memory', False)) if dl_cfg is not None else False
+
+        # Allow CLI override via environment
+        try:
+            override_workers = os.getenv('NAVSIM_OVERRIDE_WORKERS')
+            if override_workers is not None:
+                num_workers = int(override_workers)
+                print(f"Overriding num_workers with --workers={num_workers}")
+        except Exception:
+            pass
+
+        # Create dataloader subset based on generate_count
         gen_count = str(cfg.get('generate_count', 'one'))
-        
-        # Get all scene tokens from scene_loader
-        all_tokens = list(scene_loader.token_list)
+        subset = None
         
         if gen_count.isdigit():
             num = int(gen_count)
             num = max(1, num)
-            print(f"Processing first {num} scenes for trajectory library generation")
-            tokens_to_process = all_tokens[:min(num, len(all_tokens))]
+            print(f"Processing first {num} scenes")
+            subset = Subset(dataset, list(range(min(num, len(dataset)))))
         elif gen_count.lower() == 'all':
-            print(f"Processing all {len(all_tokens)} scenes")
-            tokens_to_process = all_tokens
+            print(f"Processing all {len(dataset)} scenes")
+            subset = None  # use full dataset
         else:
-            print("Extracting first scene for testing")
-            tokens_to_process = all_tokens[:1]
+            print("Processing first scene (default)")
+            subset = Subset(dataset, [0])
 
-        print(f"Will process {len(tokens_to_process)} scenes")
+        dataloader = DataLoader(
+            subset if subset is not None else dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+            pin_memory=pin_memory
+        )
+
+        # Collect tokens directly from dataloader (NO trainer.predict() needed!)
+        print("Collecting tokens from dataloader...")
+        tokens_to_process = []
+        with torch.no_grad():
+            for batch in dataloader:
+                tokens = None
+                
+                # Unpack batch depending on structure
+                if isinstance(batch, dict):
+                    # Direct dict: look for 'token' key
+                    tokens = batch.get('token', None)
+                elif isinstance(batch, (list, tuple)) and len(batch) >= 3:
+                    # Tuple format: (features_dict, targets_dict, tokens, ...)
+                    tokens = batch[2]
+                elif isinstance(batch, (list, tuple)) and len(batch) >= 2:
+                    # Fallback: check if second element is dict with tokens
+                    if isinstance(batch[1], dict) and 'token' in batch[1]:
+                        tokens = batch[1]['token']
+                
+                if tokens is None:
+                    continue
+                
+                # Handle both single token and list of tokens
+                if isinstance(tokens, (list, tuple)):
+                    tokens_to_process.extend(tokens)
+                else:
+                    tokens_to_process.append(tokens)
+        
+        print(f"Collected {len(tokens_to_process)} tokens from dataloader")
+        if len(tokens_to_process) == 0:
+            raise SystemExit("No tokens found in dataloader")
 
         # Create minimal feature builder config for camera projections
-        # (contains only camera_width and camera_height needed by make_frontcam_projector)
         class MinimalFBConfig:
             camera_width = 2048
             camera_height = 512
